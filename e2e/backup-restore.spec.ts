@@ -43,6 +43,50 @@ const storedZip = (entries: Array<{ name: string; text: string }>): Buffer => {
   return Buffer.concat([...localEntries, directory, end]);
 };
 
+const paginationBackup = (): Buffer => {
+  const timestamp = '2026-01-01T00:00:00.000Z';
+  const items = Array.from({ length: 25 }, (_, index) => {
+    const position = String(index + 1).padStart(2, '0');
+    const status =
+      index < 21 ? 'in_progress' : index < 23 ? 'planned' : 'completed';
+
+    return {
+      id: `pagination-${position}`,
+      type: 'book',
+      title: `Pagination item ${position}`,
+      category: 'Book',
+      status,
+      progress: { current: 0, target: 1, unit: 'book' },
+      notes: [],
+      tags: [],
+      collections: [],
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      attributes: {},
+      externalIds: {},
+      subunits: [],
+    };
+  });
+
+  return Buffer.from(
+    JSON.stringify({
+      schemaVersion: 2,
+      exportedAt: timestamp,
+      items,
+      collections: [],
+      history: [],
+      preferences: {
+        displayName: '',
+        locale: 'en',
+        activities: [],
+        favoriteGenres: [],
+        placeholderCovers: true,
+        onboardingCompleted: true,
+      },
+    }),
+  );
+};
+
 const itemInList = (page: Page, title: string) =>
   page
     .getByLabel('Item list')
@@ -308,6 +352,108 @@ test('creates a series with season and episode details', async ({ page }) => {
     })
     .click();
   await expect(page.getByText('A private episode description.')).toBeVisible();
+});
+
+test('paginates a large library and reconciles search results', async ({
+  page,
+}) => {
+  await openManagePage(page, 'Import');
+  page.once('dialog', (dialog) => dialog.accept());
+  await page
+    .getByLabel('Select an Open Personal Tracking JSON backup')
+    .setInputFiles({
+      name: 'pagination-backup.json',
+      mimeType: 'application/json',
+      buffer: paginationBackup(),
+    });
+
+  await expect(page.getByText('Restored 25 items from')).toBeVisible();
+  await page
+    .getByRole('navigation', { name: 'Primary navigation' })
+    .getByRole('button', { name: /^Library/ })
+    .first()
+    .click();
+
+  await expect(page.getByText('Page 1 of 2')).toBeVisible();
+  await expect(
+    page.locator('.panel-header').getByLabel('Library pagination'),
+  ).toBeVisible();
+  await expect(itemInList(page, 'Pagination item 01')).toBeVisible();
+  await expect(itemInList(page, 'Pagination item 21')).toBeHidden();
+  await expect(page.getByLabel('Item list').locator('article')).toHaveCount(24);
+  await expect(
+    page.locator('.group-head', { hasText: 'Continuing' }),
+  ).toHaveText(/Continuing\s*20 of 21/);
+  await expect(page.locator('.group-head', { hasText: 'Planned' })).toHaveText(
+    /Planned\s*2/,
+  );
+  await expect(page.locator('.group-head', { hasText: 'Finished' })).toHaveText(
+    /Finished\s*2/,
+  );
+
+  await itemInList(page, 'Pagination item 01').click();
+  await expect(
+    page.getByRole('complementary', { name: 'Selected item details' }),
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Next', exact: true }).click();
+  await expect(page.getByText('Page 2 of 2')).toBeVisible();
+  await expect(itemInList(page, 'Pagination item 21')).toBeVisible();
+  await expect(page.getByLabel('Item list').locator('article')).toHaveCount(5);
+  await expect(
+    page.locator('.group-head', { hasText: 'Continuing' }),
+  ).toHaveText(/Continuing\s*1 of 21/);
+  await expect(
+    page.getByRole('complementary', { name: 'Selected item details' }),
+  ).toBeVisible();
+
+  const sidebar = page.getByRole('complementary', {
+    name: 'Navigation sidebar',
+  });
+  const sidebarBeforeScroll = await sidebar.boundingBox();
+  const topbar = page.locator('.topbar');
+  const topbarBeforeScroll = await topbar.boundingBox();
+  const libraryHeader = page.locator('.library-panel .panel-header');
+  const scrollArea = page.locator('.main-panel');
+  const scrollAreaBox = await scrollArea.boundingBox();
+  expect(scrollAreaBox).not.toBeNull();
+  await page.mouse.move(
+    scrollAreaBox!.x + scrollAreaBox!.width / 2,
+    scrollAreaBox!.y + scrollAreaBox!.height / 2,
+  );
+  await page.mouse.wheel(0, 500);
+  await expect
+    .poll(() => scrollArea.evaluate((area) => area.scrollTop))
+    .toBeGreaterThan(0);
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+  expect(await sidebar.boundingBox()).toEqual(sidebarBeforeScroll);
+  const topbarAfterScroll = await topbar.boundingBox();
+  const libraryHeaderAfterScroll = await libraryHeader.boundingBox();
+  expect(topbarAfterScroll).toEqual(topbarBeforeScroll);
+  expect(libraryHeaderAfterScroll).not.toBeNull();
+  expect(libraryHeaderAfterScroll!.y).toBeCloseTo(
+    topbarAfterScroll!.y + topbarAfterScroll!.height,
+  );
+  await page.mouse.move(
+    sidebarBeforeScroll!.x + sidebarBeforeScroll!.width / 2,
+    sidebarBeforeScroll!.y + sidebarBeforeScroll!.height / 2,
+  );
+  await page.mouse.wheel(0, 500);
+  expect(await sidebar.evaluate((element) => element.scrollTop)).toBe(0);
+
+  await itemInList(page, 'Pagination item 21').click();
+  await expect(
+    page.getByRole('complementary', { name: 'Selected item details' }),
+  ).toBeVisible();
+  await expect
+    .poll(() => scrollArea.evaluate((area) => area.scrollTop))
+    .toBe(0);
+
+  await page
+    .getByLabel('Search your library')
+    .first()
+    .fill('Pagination item 01');
+  await expect(itemInList(page, 'Pagination item 01')).toBeVisible();
+  await expect(page.getByText('Page 2 of 2')).toBeHidden();
 });
 
 test('opens and restores local data while offline after its first visit', async ({

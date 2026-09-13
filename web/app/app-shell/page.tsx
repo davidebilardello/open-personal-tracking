@@ -32,6 +32,13 @@ import {
 } from '../../../src/domain/archive';
 import { filterItems, getHistoryTimeline } from '../../../src/domain/search';
 import {
+  clampPage,
+  getPageCount,
+  getPageRangeLabel,
+  LIBRARY_PAGE_SIZE,
+  paginate,
+} from '../../../src/domain/pagination';
+import {
   applyTvTimeImport,
   extractTvTimeCsvFilesFromZip,
   previewTvTimeImport,
@@ -106,6 +113,14 @@ type TrackedItem = {
   rating?: number;
   seasons?: SeriesSeason[];
 };
+type LibraryPaginationProps = {
+  className?: string;
+  currentPage: number;
+  itemLabel?: string;
+  pageCount: number;
+  totalItems: number;
+  onPageChange: (page: number) => void;
+};
 
 const GROUPS = [
   { key: 'progress', label: 'Continuing' },
@@ -113,6 +128,44 @@ const GROUPS = [
   { key: 'completed', label: 'Finished' },
   { key: 'archived', label: 'Archived' },
 ];
+
+const LibraryPagination = ({
+  className,
+  currentPage,
+  itemLabel = 'items',
+  pageCount,
+  totalItems,
+  onPageChange,
+}: LibraryPaginationProps) => (
+  <nav
+    className={`pagination ${className ?? ''}`}
+    aria-label="Library pagination"
+  >
+    <button
+      type="button"
+      className="mini-btn"
+      onClick={() => onPageChange(currentPage - 1)}
+      disabled={currentPage === 1}
+    >
+      Previous
+    </button>
+    <span className="pagination-status" aria-live="polite">
+      Page {currentPage} of {pageCount}
+      <span className="pagination-range">
+        {getPageRangeLabel(totalItems, currentPage, LIBRARY_PAGE_SIZE)}{' '}
+        {itemLabel}
+      </span>
+    </span>
+    <button
+      type="button"
+      className="mini-btn"
+      onClick={() => onPageChange(currentPage + 1)}
+      disabled={currentPage === pageCount}
+    >
+      Next
+    </button>
+  </nav>
+);
 
 const getCoverImage = (image?: string): string => image?.trim() ?? '';
 
@@ -371,6 +424,7 @@ export default function AppShellPage() {
   const [activeNav, setActiveNav] = useState('library');
   const [activeCategory, setActiveCategory] = useState('all');
   const [query, setQuery] = useState('');
+  const [libraryPage, setLibraryPage] = useState(1);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [newItem, setNewItem] = useState<ItemForm>(emptyItemForm);
@@ -399,6 +453,7 @@ export default function AppShellPage() {
     useState(false);
   const [isTvTimeImporting, setIsTvTimeImporting] = useState(false);
   const application = useRef<ArchiveApplication | null>(null);
+  const mainPanel = useRef<HTMLElement | null>(null);
   const restoreInput = useRef<HTMLInputElement | null>(null);
   const tvTimeInput = useRef<HTMLInputElement | null>(null);
   const preferenceSaveQueue = useRef<Promise<void>>(Promise.resolve());
@@ -971,9 +1026,54 @@ export default function AppShellPage() {
     }).map((item) => toTrackedItem(item, preferences.placeholderCovers));
   }, [activeCategory, archive, preferences.placeholderCovers, query]);
 
-  const upNextItems = visibleItems.filter((item) => item.status === 'progress');
+  const continuingItems = visibleItems.filter(
+    (item) => item.status === 'progress',
+  );
+  const libraryPageCount = getPageCount(
+    continuingItems.length,
+    LIBRARY_PAGE_SIZE,
+  );
+  const currentLibraryPage = clampPage(
+    libraryPage,
+    continuingItems.length,
+    LIBRARY_PAGE_SIZE,
+  );
+  const paginatedContinuingItems = useMemo(
+    () => paginate(continuingItems, currentLibraryPage, LIBRARY_PAGE_SIZE),
+    [continuingItems, currentLibraryPage],
+  );
+
+  const upNextItems = paginatedContinuingItems;
   const timeline = archive ? getHistoryTimeline(archive.history) : [];
   const isLibrary = activeNav === 'library';
+
+  useEffect(() => {
+    if (libraryPage !== currentLibraryPage) {
+      setLibraryPage(currentLibraryPage);
+    }
+  }, [currentLibraryPage, libraryPage]);
+
+  const updateLibraryQuery = (nextQuery: string) => {
+    setQuery(nextQuery);
+    setLibraryPage(1);
+  };
+
+  const updateLibraryCategory = (category: string) => {
+    setActiveCategory(category);
+    setLibraryPage(1);
+  };
+
+  const openItemDetails = (itemId: string) => {
+    setSelectedId(itemId);
+
+    const prefersReducedMotion = window.matchMedia(
+      '(prefers-reduced-motion: reduce)',
+    ).matches;
+    mainPanel.current?.scrollTo({
+      top: 0,
+      behavior: prefersReducedMotion ? 'auto' : 'smooth',
+    });
+  };
 
   const handleSaveDrawer = async () => {
     if (!archive || !application.current || !newItem.title.trim()) return;
@@ -1254,7 +1354,7 @@ export default function AppShellPage() {
         </div>
       </aside>
 
-      <main className="main-panel">
+      <main ref={mainPanel} className="main-panel">
         <header className="topbar">
           <h1 className="page-title">
             {activeNav === 'library'
@@ -1269,7 +1369,7 @@ export default function AppShellPage() {
               <input
                 type="search"
                 value={query}
-                onChange={(event) => setQuery(event.target.value)}
+                onChange={(event) => updateLibraryQuery(event.target.value)}
                 placeholder="Search items, authors, or tags…"
                 autoComplete="off"
               />
@@ -1277,7 +1377,7 @@ export default function AppShellPage() {
                 <button
                   type="button"
                   className="search-clear-top"
-                  onClick={() => setQuery('')}
+                  onClick={() => updateLibraryQuery('')}
                   aria-label="Clear search"
                 >
                   &times;
@@ -1295,1173 +1395,1226 @@ export default function AppShellPage() {
           </div>
         </header>
 
-        {operationError && (
-          <p className="empty-state" role="alert">
-            {operationError}
-          </p>
-        )}
+        <div className="main-scroll-area">
+          {operationError && (
+            <p className="empty-state" role="alert">
+              {operationError}
+            </p>
+          )}
 
-        {isLibrary ? (
-          <div
-            className={`content ${hasSelectedItem ? '' : 'content--without-details'}`}
-            id="panelLibrary"
-          >
-            <section
-              className="library-panel"
-              aria-labelledby="library-panel-title"
+          {isLibrary ? (
+            <div
+              className={`content ${hasSelectedItem ? '' : 'content--without-details'}`}
+              id="panelLibrary"
             >
-              <div className="panel-header">
-                <div className="panel-header-top">
-                  <h2 id="library-panel-title" className="panel-title">
-                    Your tracked items
-                  </h2>
-                  <span className="result-count" aria-live="polite">
-                    {visibleItems.length} of {items.length} shown
-                  </span>
-                </div>
-
-                <div className="panel-toolbar">
-                  <label
-                    className="search search-inline"
-                    aria-label="Search your library"
-                  >
-                    <input
-                      type="search"
-                      value={query}
-                      onChange={(event) => setQuery(event.target.value)}
-                      placeholder="Search items, authors, tags…"
-                      autoComplete="off"
-                    />
-                    {query && (
-                      <button
-                        type="button"
-                        className="search-clear"
-                        onClick={() => setQuery('')}
-                        aria-label="Clear search"
-                      >
-                        &times;
-                      </button>
-                    )}
-                    <kbd className="search-kbd">/</kbd>
-                  </label>
-
-                  <div className="panel-tools" aria-label="Filter by category">
-                    {['all', 'Book', 'Film', 'Series', 'Game'].map(
-                      (category) => (
-                        <button
-                          key={category}
-                          type="button"
-                          className={`filter-chip ${activeCategory === category ? 'is-selected' : ''}`}
-                          onClick={() => setActiveCategory(category)}
-                        >
-                          {category === 'all' ? 'All' : category}
-                        </button>
-                      ),
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div
-                className="stats-grid"
-                aria-label="Library summary measurements"
+              <section
+                className="library-panel"
+                aria-labelledby="library-panel-title"
               >
-                <div className="stat-card">
-                  <span className="stat-label">Total</span>
-                  <div className="stat-value">{items.length}</div>
-                </div>
-                <div className="stat-card">
-                  <span className="stat-label">In progress</span>
-                  <div className="stat-value">
-                    {items.filter((item) => item.status === 'progress').length}
+                <div className="panel-header">
+                  <div className="panel-header-top">
+                    <h2 id="library-panel-title" className="panel-title">
+                      Your tracked items
+                    </h2>
+                    <span className="result-count" aria-live="polite">
+                      {visibleItems.length} of {items.length} shown
+                    </span>
                   </div>
-                </div>
-                <div className="stat-card">
-                  <span className="stat-label">Completed</span>
-                  <div className="stat-value">
-                    {items.filter((item) => item.status === 'completed').length}
-                  </div>
-                </div>
-                <div className="stat-card">
-                  <span className="stat-label">Collections</span>
-                  <div className="stat-value">{archive.collections.length}</div>
-                </div>
-              </div>
 
-              <div className="up-next" hidden={upNextItems.length === 0}>
-                <p className="up-next-label">Up next</p>
-                <div className="up-next-track">
-                  {upNextItems.map((item) => (
-                    <div key={item.id} className="up-next-card">
-                      <span
-                        className="up-next-cover"
-                        style={{
-                          backgroundImage: coverBackground(
-                            item.image,
-                            item.usePlaceholderCover,
-                            'linear-gradient(180deg, rgba(0,0,0,0.05), rgba(0,0,0,0.28))',
-                          ),
-                          backgroundColor: item.jacket,
-                          backgroundSize: 'cover',
-                          backgroundPosition: 'center',
-                        }}
-                        aria-hidden="true"
+                  <div className="panel-toolbar">
+                    <label
+                      className="search search-inline"
+                      aria-label="Search your library"
+                    >
+                      <input
+                        type="search"
+                        value={query}
+                        onChange={(event) =>
+                          updateLibraryQuery(event.target.value)
+                        }
+                        placeholder="Search items, authors, tags…"
+                        autoComplete="off"
                       />
-                      <span className="up-next-info">
-                        <span className="up-next-title">{item.title}</span>
-                        <span className="up-next-next">{item.next}</span>
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {items.length === 0 ? (
-                <div className="empty-state">
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.4"
-                    aria-hidden="true"
-                  >
-                    <rect x="4" y="3" width="16" height="18" rx="1.5" />
-                    <path d="M8 8h8M8 12h8M8 16h4" />
-                  </svg>
-                  <h3>Nothing tracked yet</h3>
-                  <p>
-                    Add the first thing you&apos;re reading, watching, or
-                    playing. It stays on this device, no account needed.
-                  </p>
-                  <button
-                    type="button"
-                    className="primary-btn"
-                    onClick={openNewItemDrawer}
-                  >
-                    Add your first item
-                  </button>
-                </div>
-              ) : visibleItems.length === 0 ? (
-                <p className="empty-state" style={{ display: 'block' }}>
-                  No items match your search.
-                </p>
-              ) : (
-                <div className="list" aria-label="Item list">
-                  {GROUPS.map((group) => {
-                    const items = visibleItems.filter(
-                      (item) => bucketOf(item.status) === group.key,
-                    );
-                    if (!items.length) return null;
-
-                    return (
-                      <div key={group.key} className="item-group">
-                        <div className="group-head">
-                          <h3>{group.label}</h3>
-                          <span className="n">{items.length}</span>
-                        </div>
-
-                        {items.map((item) => (
-                          <article
-                            key={item.id}
-                            className={`item-row ${selectedId === item.id ? 'is-selected' : ''}`}
-                            tabIndex={0}
-                            onClick={() => setSelectedId(item.id)}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter' || event.key === ' ') {
-                                event.preventDefault();
-                                setSelectedId(item.id);
-                              }
-                            }}
-                          >
-                            <div
-                              className="item-cover"
-                              aria-hidden="true"
-                              style={{
-                                backgroundImage: coverBackground(
-                                  item.image,
-                                  item.usePlaceholderCover,
-                                  'linear-gradient(180deg, rgba(0,0,0,0.04), rgba(0,0,0,0.35))',
-                                ),
-                                backgroundColor: item.jacket,
-                                backgroundSize: 'cover',
-                                backgroundPosition: 'center',
-                              }}
-                            >
-                              <span>{item.title.charAt(0)}</span>
-                            </div>
-
-                            <div className="item-main">
-                              <div className="item-head">
-                                <h3 className="item-title">{item.title}</h3>
-                                <span className="tag">{item.category}</span>
-                                <span
-                                  className={`status-chip status-${item.status}`}
-                                >
-                                  {STATUS_LABEL[item.status]}
-                                </span>
-                              </div>
-                              <div className="item-meta">
-                                <span>{item.creator}</span>
-                                <span>•</span>
-                                <span>{item.meta}</span>
-                              </div>
-                            </div>
-
-                            <div className="item-right">
-                              {item.progressKind === 'count' ? (
-                                <span
-                                  className="item-progress-count"
-                                  aria-label={item.progressText}
-                                >
-                                  {item.value}
-                                  <small>episodes</small>
-                                </span>
-                              ) : (
-                                <div
-                                  className="progress-ring"
-                                  style={{
-                                    ['--value' as string]:
-                                      getItemProgress(item),
-                                  }}
-                                  aria-label={item.progressText}
-                                >
-                                  <span>
-                                    {Math.round(getItemProgress(item))}%
-                                  </span>
-                                </div>
-                              )}
-                              <button
-                                type="button"
-                                className="mini-btn"
-                                onClick={() => setSelectedId(item.id)}
-                              >
-                                Open
-                              </button>
-                            </div>
-                          </article>
-                        ))}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </section>
-
-            <aside
-              className="detail-panel"
-              aria-label="Selected item details"
-              hidden={!hasSelectedItem}
-            >
-              <div className="detail-header">
-                <strong>Details</strong>
-                <div className="detail-actions">
-                  <button
-                    type="button"
-                    className="mini-btn"
-                    onClick={() => setDetailView('expanded')}
-                    disabled={!hasSelectedItem}
-                  >
-                    Open page
-                  </button>
-                  <button
-                    type="button"
-                    className="mini-btn"
-                    onClick={handleEditSelected}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    className="mini-btn"
-                    onClick={() => void handleDeleteSelected()}
-                    disabled={!hasSelectedItem}
-                  >
-                    Delete
-                  </button>
-                </div>
-              </div>
-
-              <div className="detail-body">
-                <div className="detail-hero">
-                  <div
-                    className="detail-cover"
-                    aria-hidden="true"
-                    style={{
-                      backgroundImage: coverBackground(
-                        selectedItem.image,
-                        selectedItem.usePlaceholderCover,
-                        'linear-gradient(180deg, rgba(24,27,22,0.08), rgba(24,27,22,0.4))',
-                      ),
-                      backgroundColor: selectedItem.jacket,
-                      backgroundSize: 'cover',
-                      backgroundPosition: 'center',
-                    }}
-                  />
-                  <div className="detail-copy">
-                    <h2 className="detail-title">{selectedItem.title}</h2>
-                    <div className="detail-meta">
-                      <span className="tag">{selectedItem.category}</span>
-                      {selectedItem.tags.slice(0, 2).map((tag) => (
-                        <span key={tag} className="tag">
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-                    <div className="detail-credits">
-                      <span>Author: {selectedItem.creator}</span>
-                      <span>
-                        Category: {selectedItem.category.toLowerCase()}
-                      </span>
-                      <span>Updated: 2 days ago</span>
-                    </div>
-                  </div>
-                </div>
-
-                <>
-                  <section
-                    className="detail-section"
-                    aria-labelledby="description-label"
-                  >
-                    <h3 id="description-label" className="section-label">
-                      Synopsis
-                    </h3>
-                    <p className="description">{selectedItem.description}</p>
-                  </section>
-
-                  <section
-                    className="detail-section"
-                    aria-labelledby="progress-label"
-                  >
-                    <h3 id="progress-label" className="section-label">
-                      Progress
-                    </h3>
-                    {selectedItem.progressKind === 'count' ? (
-                      <p className="detail-aggregate-progress">
-                        {selectedProgressLabel}. TV Time did not provide season
-                        or episode rows for this series in the selected export.
-                      </p>
-                    ) : (
-                      <div className="progress-stack">
-                        <div className="progress-line" aria-hidden="true">
-                          <span
-                            className="progress-bar"
-                            style={{ width: `${selectedProgress}%` }}
-                          />
-                        </div>
-                        <div className="progress-values">
-                          <span>{selectedProgressLabel}</span>
-                          <span>{selectedProgressPercent}%</span>
-                        </div>
-                      </div>
-                    )}
-                  </section>
-
-                  {selectedItem.category === 'Series' && (
-                    <section
-                      className="detail-section detail-series-overview"
-                      aria-labelledby="series-overview-label"
-                    >
-                      <div className="detail-series-overview-head">
-                        <div>
-                          <h3
-                            id="series-overview-label"
-                            className="section-label"
-                          >
-                            Seasons and episodes
-                          </h3>
-                          <p>
-                            {selectedEpisodes.length > 0
-                              ? `${selectedCompletedEpisodes} of ${selectedEpisodes.length} episodes watched`
-                              : 'No episode structure has been added yet.'}
-                          </p>
-                        </div>
+                      {query && (
                         <button
-                          className="mini-btn"
                           type="button"
-                          onClick={handleEditSelected}
+                          className="search-clear"
+                          onClick={() => updateLibraryQuery('')}
+                          aria-label="Clear search"
                         >
-                          Edit episodes
+                          &times;
                         </button>
-                      </div>
-
-                      {selectedSeasons.length > 0 ? (
-                        <div className="detail-season-list">
-                          {selectedSeasons.map((season) => {
-                            const watchedEpisodes = season.episodes.filter(
-                              (episode) => episode.completed,
-                            ).length;
-                            return (
-                              <section
-                                className="detail-season-summary"
-                                key={season.id}
-                              >
-                                <div className="detail-season-summary-head">
-                                  <strong>{season.title}</strong>
-                                  <span>
-                                    {watchedEpisodes}/{season.episodes.length}{' '}
-                                    watched
-                                  </span>
-                                </div>
-                                {season.description && (
-                                  <p>{season.description}</p>
-                                )}
-                                <ul className="detail-episode-list">
-                                  {season.episodes.map((episode) => (
-                                    <li key={episode.id}>
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setDetailView('expanded');
-                                          setSelectedEpisode({
-                                            seasonNumber: season.number,
-                                            episodeNumber: episode.number,
-                                          });
-                                        }}
-                                      >
-                                        <span aria-hidden="true">
-                                          {episode.completed ? '✓' : '○'}
-                                        </span>
-                                        <span>
-                                          E{episode.number} · {episode.title}
-                                        </span>
-                                      </button>
-                                    </li>
-                                  ))}
-                                </ul>
-                              </section>
-                            );
-                          })}
-                        </div>
-                      ) : (
-                        <p className="detail-series-empty">
-                          {selectedItem.progressKind === 'count'
-                            ? `${selectedItem.progressText} were imported, but TV Time did not include individual season or episode rows for this series.`
-                            : 'Add seasons and episodes in edit mode to track them individually.'}
-                        </p>
                       )}
-                    </section>
-                  )}
+                      <kbd className="search-kbd">/</kbd>
+                    </label>
 
-                  <section
-                    className="detail-section"
-                    aria-labelledby="attributes-label"
-                  >
-                    <h3 id="attributes-label" className="section-label">
-                      Attributes
-                    </h3>
                     <div
-                      className="attribute-list"
-                      aria-label="Item attributes"
+                      className="panel-tools"
+                      aria-label="Filter by category"
                     >
-                      <span className="attribute">
-                        Rating: {selectedItem.rating ?? 'Not rated'}
-                        {selectedItem.rating !== undefined ? '★' : ''}
-                      </span>
-                      <span className="attribute">
-                        Status: {STATUS_LABEL[selectedItem.status]}
-                      </span>
-                      <span className="attribute">
-                        Format: {selectedItem.meta}
-                      </span>
-                    </div>
-                  </section>
-
-                  <section
-                    className="detail-section"
-                    aria-labelledby="history-label"
-                  >
-                    <h3 id="history-label" className="section-label">
-                      Recent history
-                    </h3>
-                    <ul
-                      className="timeline"
-                      aria-label="Recent changes timeline"
-                    >
-                      {timeline
-                        .filter((entry) => entry.itemId === selectedItem.id)
-                        .slice(0, 3)
-                        .map((entry) => (
-                          <li key={entry.id}>{entry.summary}</li>
-                        ))}
-                      {timeline.every(
-                        (entry) => entry.itemId !== selectedItem.id,
-                      ) && <li>No changes recorded for this item yet.</li>}
-                    </ul>
-                  </section>
-                </>
-              </div>
-            </aside>
-          </div>
-        ) : (
-          <div className="screen-panel">
-            {activeNav === 'collections' && (
-              <>
-                <div className="screen-hero">
-                  <div>
-                    <span className="eyebrow">Collections</span>
-                    <h2>Curated shelves</h2>
-                    <p>
-                      Organize your tracked items by mood, format, and purpose.
-                    </p>
-                  </div>
-                  <button className="primary-btn" type="button">
-                    New collection
-                  </button>
-                </div>
-                <div className="screen-grid">
-                  <div className="summary-card">
-                    <span className="eyebrow">Total</span>
-                    <strong>{archive.collections.length}</strong>
-                    <span>Saved in your local archive</span>
-                  </div>
-                  <div className="summary-card">
-                    <span className="eyebrow">Featured</span>
-                    <strong>
-                      {
-                        archive.collections.filter(
-                          (collection) => collection.itemIds.length > 0,
-                        ).length
-                      }
-                    </strong>
-                    <span>Containing tracked items</span>
-                  </div>
-                  <div className="summary-card">
-                    <span className="eyebrow">Ready</span>
-                    <strong>
-                      {archive.collections.reduce(
-                        (total, collection) =>
-                          total + collection.itemIds.length,
-                        0,
+                      {['all', 'Book', 'Film', 'Series', 'Game'].map(
+                        (category) => (
+                          <button
+                            key={category}
+                            type="button"
+                            className={`filter-chip ${activeCategory === category ? 'is-selected' : ''}`}
+                            onClick={() => updateLibraryCategory(category)}
+                          >
+                            {category === 'all' ? 'All' : category}
+                          </button>
+                        ),
                       )}
-                    </strong>
-                    <span>Item references in total</span>
-                  </div>
-                </div>
-              </>
-            )}
+                    </div>
 
-            {activeNav === 'discover' && (
-              <>
-                <div className="screen-hero discover-hero">
-                  <div>
-                    <span className="eyebrow">Discover</span>
-                    <h2>
-                      {preferences.displayName
-                        ? `Made for ${preferences.displayName}`
-                        : 'Make this library yours'}
-                    </h2>
-                    <p>
-                      {preferences.activities.length
-                        ? `Start with ${preferences.activities.join(', ')} and refine what you want to track.`
-                        : 'Choose what you enjoy in Settings to make discovery useful.'}
-                    </p>
-                  </div>
-                  <button
-                    className="primary-btn"
-                    type="button"
-                    onClick={openNewItemDrawer}
-                  >
-                    <Plus size={14} aria-hidden="true" />
-                    Add to library
-                  </button>
-                </div>
-                <div className="screen-grid discovery-grid">
-                  <div className="summary-card">
-                    <span className="eyebrow">Watch next</span>
-                    <strong>{upNextItems.length}</strong>
-                    <span>Items ready to continue</span>
-                  </div>
-                  <div className="summary-card">
-                    <span className="eyebrow">Your genres</span>
-                    <strong>{preferences.favoriteGenres.length || '—'}</strong>
-                    <span>
-                      {preferences.favoriteGenres.length
-                        ? preferences.favoriteGenres.join(' · ')
-                        : 'Set favourites in Settings'}
-                    </span>
-                  </div>
-                  <div className="summary-card">
-                    <span className="eyebrow">Local first</span>
-                    <strong>0</strong>
-                    <span>
-                      External recommendations until a provider is connected
-                    </span>
+                    {continuingItems.length > 0 && libraryPageCount > 1 && (
+                      <LibraryPagination
+                        className="pagination--toolbar"
+                        currentPage={currentLibraryPage}
+                        itemLabel="continuing items"
+                        pageCount={libraryPageCount}
+                        totalItems={continuingItems.length}
+                        onPageChange={setLibraryPage}
+                      />
+                    )}
                   </div>
                 </div>
-              </>
-            )}
 
-            {activeNav === 'profile' && (
-              <>
-                <div className="screen-hero profile-hero">
-                  <div>
-                    <span className="eyebrow">Profile</span>
-                    <h2>
-                      {preferences.displayName || 'Your personal archive'}
-                    </h2>
-                    <p>
-                      {preferences.activities.length
-                        ? `Tracking ${preferences.activities.join(', ')} locally.`
-                        : 'Set your tracking preferences to personalise this space.'}
-                    </p>
+                <div
+                  className="stats-grid"
+                  aria-label="Library summary measurements"
+                >
+                  <div className="stat-card">
+                    <span className="stat-label">Total</span>
+                    <div className="stat-value">{items.length}</div>
                   </div>
-                  <button
-                    className="ghost-btn"
-                    type="button"
-                    onClick={() => setActiveNav('settings')}
-                  >
-                    Edit preferences
-                  </button>
-                </div>
-                <div className="screen-grid">
-                  <div className="summary-card">
-                    <span className="eyebrow">Tracked</span>
-                    <strong>{items.length}</strong>
-                    <span>Across your active categories</span>
+                  <div className="stat-card">
+                    <span className="stat-label">In progress</span>
+                    <div className="stat-value">
+                      {
+                        items.filter((item) => item.status === 'progress')
+                          .length
+                      }
+                    </div>
                   </div>
-                  <div className="summary-card">
-                    <span className="eyebrow">Finished</span>
-                    <strong>
+                  <div className="stat-card">
+                    <span className="stat-label">Completed</span>
+                    <div className="stat-value">
                       {
                         items.filter((item) => item.status === 'completed')
                           .length
                       }
-                    </strong>
-                    <span>Saved in your history</span>
+                    </div>
                   </div>
-                  <div className="summary-card">
-                    <span className="eyebrow">Language</span>
-                    <strong>{preferences.locale === 'it' ? 'IT' : 'EN'}</strong>
-                    <span>Saved with your preferences</span>
-                  </div>
-                </div>
-              </>
-            )}
-
-            {activeNav === 'history' && (
-              <>
-                <div className="screen-hero">
-                  <div>
-                    <span className="eyebrow">History</span>
-                    <h2>Recent changes</h2>
-                    <p>Every update stays local and exportable.</p>
-                  </div>
-                  <button className="ghost-btn" type="button">
-                    Export log
-                  </button>
-                </div>
-                <div className="layout-warmup">
-                  <div className="content-card">
-                    <span className="eyebrow">Timeline</span>
-                    <ul className="timeline" aria-label="History timeline">
-                      {timeline.map((entry) => (
-                        <li key={entry.id}>{entry.summary}</li>
-                      ))}
-                      {timeline.length === 0 && (
-                        <li>No changes recorded yet.</li>
-                      )}
-                    </ul>
-                  </div>
-                  <div className="content-card">
-                    <span className="eyebrow">Summary</span>
-                    <div className="list-stack">
-                      <div className="mini-row">
-                        <div>
-                          <strong>{timeline.length} updates</strong>
-                          <br />
-                          <small>This week</small>
-                        </div>
-                      </div>
-                      <div className="mini-row">
-                        <div>
-                          <strong>
-                            {
-                              timeline.filter(
-                                (entry) => entry.action === 'imported',
-                              ).length
-                            }{' '}
-                            imports
-                          </strong>
-                          <br />
-                          <small>Last 30 days</small>
-                        </div>
-                      </div>
+                  <div className="stat-card">
+                    <span className="stat-label">Collections</span>
+                    <div className="stat-value">
+                      {archive.collections.length}
                     </div>
                   </div>
                 </div>
-              </>
-            )}
 
-            {activeNav === 'export' && (
-              <>
-                <div className="screen-hero">
-                  <div>
-                    <span className="eyebrow">Export</span>
-                    <h2>Share your archive</h2>
-                    <p>
-                      Keep everything in a durable, readable format you own.
-                    </p>
-                  </div>
-                  <button
-                    className="primary-btn"
-                    type="button"
-                    onClick={handleExportBackup}
-                  >
-                    Export now
-                  </button>
-                </div>
-                {backupStatus && activeNav === 'export' && (
-                  <p className="empty-state" role="status">
-                    {backupStatus}
-                  </p>
-                )}
-                <div className="screen-grid">
-                  <div className="summary-card">
-                    <span className="eyebrow">Last export</span>
-                    <strong>On demand</strong>
-                    <span>
-                      Download a complete archive whenever you need one
-                    </span>
-                  </div>
-                  <div className="summary-card">
-                    <span className="eyebrow">Format</span>
-                    <strong>JSON</strong>
-                    <span>Portable, inspectable, re-importable</span>
-                  </div>
-                  <div className="summary-card">
-                    <span className="eyebrow">Backup</span>
-                    <strong>Local</strong>
-                    <span>Export creates a copy you control</span>
-                  </div>
-                </div>
-              </>
-            )}
-
-            {activeNav === 'settings' && (
-              <>
-                <div className="screen-hero">
-                  <div>
-                    <span className="eyebrow">Settings</span>
-                    <h2>Preferences</h2>
-                    <p>Keep the app local-first and comfy to use.</p>
-                  </div>
-                  <button className="ghost-btn" type="button">
-                    Reset defaults
-                  </button>
-                </div>
-                <div className="setting-card">
-                  <h3>Appearance</h3>
-                  <div className="theme-switch" aria-label="Theme switcher">
-                    {(['auto', 'light', 'dark'] as const).map((mode) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        className={`theme-btn ${themeMode === mode ? 'is-active' : ''}`}
-                        data-theme-option={mode}
-                        onClick={() => setThemeMode(mode)}
-                      >
-                        {mode === 'auto'
-                          ? 'Auto'
-                          : mode === 'light'
-                            ? 'Light'
-                            : 'Dark'}
-                      </button>
+                <div className="up-next" hidden={upNextItems.length === 0}>
+                  <p className="up-next-label">Up next</p>
+                  <div className="up-next-track">
+                    {upNextItems.map((item) => (
+                      <div key={item.id} className="up-next-card">
+                        <span
+                          className="up-next-cover"
+                          style={{
+                            backgroundImage: coverBackground(
+                              item.image,
+                              item.usePlaceholderCover,
+                              'linear-gradient(180deg, rgba(0,0,0,0.05), rgba(0,0,0,0.28))',
+                            ),
+                            backgroundColor: item.jacket,
+                            backgroundSize: 'cover',
+                            backgroundPosition: 'center',
+                          }}
+                          aria-hidden="true"
+                        />
+                        <span className="up-next-info">
+                          <span className="up-next-title">{item.title}</span>
+                          <span className="up-next-next">{item.next}</span>
+                        </span>
+                      </div>
                     ))}
                   </div>
-                  <div className="setting-row">
-                    <div>
-                      <strong>Language</strong>
-                      <br />
-                      <small>
-                        Used for your app preferences and future catalog results
-                      </small>
-                    </div>
-                    <select
-                      className="setting-select"
-                      value={preferences.locale}
-                      onChange={(event) =>
-                        savePreferences({
-                          ...preferences,
-                          locale: event.target
-                            .value as UserPreferences['locale'],
-                        })
-                      }
+                </div>
+
+                {items.length === 0 ? (
+                  <div className="empty-state">
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.4"
+                      aria-hidden="true"
                     >
-                      <option value="en">English</option>
-                      <option value="it">Italiano</option>
-                    </select>
-                  </div>
-                  <div className="setting-row">
-                    <div>
-                      <strong>Follow system theme</strong>
-                      <br />
-                      <small>Sync with your computer settings</small>
-                    </div>
-                    <label className="switch">
-                      <input
-                        type="checkbox"
-                        checked={themeMode === 'auto'}
-                        onChange={(event) =>
-                          setThemeMode(event.target.checked ? 'auto' : 'dark')
-                        }
-                      />
-                      <i />
-                    </label>
-                  </div>
-                  <div className="setting-row">
-                    <div>
-                      <strong>Placeholder covers</strong>
-                      <br />
-                      <small>
-                        Use a neutral cover when an item has no artwork
-                      </small>
-                    </div>
-                    <label className="switch">
-                      <input
-                        type="checkbox"
-                        checked={preferences.placeholderCovers}
-                        onChange={(event) =>
-                          void savePreferences({
-                            ...preferences,
-                            placeholderCovers: event.target.checked,
-                          })
-                        }
-                      />
-                      <i />
-                    </label>
-                  </div>
-                  <div className="setting-row">
-                    <div>
-                      <strong>Compact cards</strong>
-                      <br />
-                      <small>Denser list layout</small>
-                    </div>
-                    <label className="switch">
-                      <input type="checkbox" />
-                      <i />
-                    </label>
-                  </div>
-                  <div className="setting-row setting-row--stacked">
-                    <div>
-                      <strong>Roadmap</strong>
-                      <br />
-                      <small>See what is coming next</small>
-                    </div>
-                    <a
-                      className="inline-link"
-                      href={ROADMAP_URL}
-                      target="_blank"
-                      rel="noreferrer noopener"
+                      <rect x="4" y="3" width="16" height="18" rx="1.5" />
+                      <path d="M8 8h8M8 12h8M8 16h4" />
+                    </svg>
+                    <h3>Nothing tracked yet</h3>
+                    <p>
+                      Add the first thing you&apos;re reading, watching, or
+                      playing. It stays on this device, no account needed.
+                    </p>
+                    <button
+                      type="button"
+                      className="primary-btn"
+                      onClick={openNewItemDrawer}
                     >
-                      Open roadmap
-                    </a>
+                      Add your first item
+                    </button>
                   </div>
-                  <div className="setting-row setting-row--stacked">
-                    <div>
-                      <strong>Report a bug</strong>
-                      <br />
-                      <small>Share a quick issue with the team</small>
-                    </div>
+                ) : visibleItems.length === 0 ? (
+                  <p className="empty-state" style={{ display: 'block' }}>
+                    No items match your search.
+                  </p>
+                ) : (
+                  <div className="list" aria-label="Item list">
+                    {GROUPS.map((group) => {
+                      const groupItems = visibleItems.filter(
+                        (item) => bucketOf(item.status) === group.key,
+                      );
+                      const items =
+                        group.key === 'progress'
+                          ? paginatedContinuingItems
+                          : groupItems;
+                      if (!items.length) return null;
+
+                      return (
+                        <div key={group.key} className="item-group">
+                          <div className="group-head">
+                            <h3>{group.label}</h3>
+                            <span className="n">
+                              {group.key === 'progress'
+                                ? `${items.length} of ${groupItems.length}`
+                                : groupItems.length}
+                            </span>
+                          </div>
+
+                          {items.map((item) => (
+                            <article
+                              key={item.id}
+                              className={`item-row ${selectedId === item.id ? 'is-selected' : ''}`}
+                              tabIndex={0}
+                              onClick={() => openItemDetails(item.id)}
+                              onKeyDown={(event) => {
+                                if (
+                                  event.key === 'Enter' ||
+                                  event.key === ' '
+                                ) {
+                                  event.preventDefault();
+                                  openItemDetails(item.id);
+                                }
+                              }}
+                            >
+                              <div
+                                className="item-cover"
+                                aria-hidden="true"
+                                style={{
+                                  backgroundImage: coverBackground(
+                                    item.image,
+                                    item.usePlaceholderCover,
+                                    'linear-gradient(180deg, rgba(0,0,0,0.04), rgba(0,0,0,0.35))',
+                                  ),
+                                  backgroundColor: item.jacket,
+                                  backgroundSize: 'cover',
+                                  backgroundPosition: 'center',
+                                }}
+                              >
+                                <span>{item.title.charAt(0)}</span>
+                              </div>
+
+                              <div className="item-main">
+                                <div className="item-head">
+                                  <h3 className="item-title">{item.title}</h3>
+                                  <span className="tag">{item.category}</span>
+                                  <span
+                                    className={`status-chip status-${item.status}`}
+                                  >
+                                    {STATUS_LABEL[item.status]}
+                                  </span>
+                                </div>
+                                <div className="item-meta">
+                                  <span>{item.creator}</span>
+                                  <span>•</span>
+                                  <span>{item.meta}</span>
+                                </div>
+                              </div>
+
+                              <div className="item-right">
+                                {item.progressKind === 'count' ? (
+                                  <span
+                                    className="item-progress-count"
+                                    aria-label={item.progressText}
+                                  >
+                                    {item.value}
+                                    <small>episodes</small>
+                                  </span>
+                                ) : (
+                                  <div
+                                    className="progress-ring"
+                                    style={{
+                                      ['--value' as string]:
+                                        getItemProgress(item),
+                                    }}
+                                    aria-label={item.progressText}
+                                  >
+                                    <span>
+                                      {Math.round(getItemProgress(item))}%
+                                    </span>
+                                  </div>
+                                )}
+                                <button
+                                  type="button"
+                                  className="mini-btn"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    openItemDetails(item.id);
+                                  }}
+                                >
+                                  Open
+                                </button>
+                              </div>
+                            </article>
+                          ))}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+
+              <aside
+                className="detail-panel"
+                aria-label="Selected item details"
+                hidden={!hasSelectedItem}
+              >
+                <div className="detail-header">
+                  <strong>Details</strong>
+                  <div className="detail-actions">
                     <button
                       type="button"
                       className="mini-btn"
-                      onClick={handleReportBug}
+                      onClick={() => setDetailView('expanded')}
+                      disabled={!hasSelectedItem}
                     >
-                      Report
+                      Open page
+                    </button>
+                    <button
+                      type="button"
+                      className="mini-btn"
+                      onClick={handleEditSelected}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="mini-btn"
+                      onClick={() => void handleDeleteSelected()}
+                      disabled={!hasSelectedItem}
+                    >
+                      Delete
                     </button>
                   </div>
-                  <div className="setting-card app-about-card">
-                    <span className="eyebrow">About this app</span>
-                    <h3>Preview build</h3>
-                    <p>
-                      This local-first preview is not a published release yet.
-                      Published release notes will appear here once the project
-                      ships tagged versions.
-                    </p>
-                    <div className="app-about-actions">
-                      <a
-                        className="inline-link"
-                        href={CHANGELOG_URL}
-                        target="_blank"
-                        rel="noreferrer noopener"
+                </div>
+
+                <div className="detail-body">
+                  <div className="detail-hero">
+                    <div
+                      className="detail-cover"
+                      aria-hidden="true"
+                      style={{
+                        backgroundImage: coverBackground(
+                          selectedItem.image,
+                          selectedItem.usePlaceholderCover,
+                          'linear-gradient(180deg, rgba(24,27,22,0.08), rgba(24,27,22,0.4))',
+                        ),
+                        backgroundColor: selectedItem.jacket,
+                        backgroundSize: 'cover',
+                        backgroundPosition: 'center',
+                      }}
+                    />
+                    <div className="detail-copy">
+                      <h2 className="detail-title">{selectedItem.title}</h2>
+                      <div className="detail-meta">
+                        <span className="tag">{selectedItem.category}</span>
+                        {selectedItem.tags.slice(0, 2).map((tag) => (
+                          <span key={tag} className="tag">
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                      <div className="detail-credits">
+                        <span>Author: {selectedItem.creator}</span>
+                        <span>
+                          Category: {selectedItem.category.toLowerCase()}
+                        </span>
+                        <span>Updated: 2 days ago</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <>
+                    <section
+                      className="detail-section"
+                      aria-labelledby="description-label"
+                    >
+                      <h3 id="description-label" className="section-label">
+                        Synopsis
+                      </h3>
+                      <p className="description">{selectedItem.description}</p>
+                    </section>
+
+                    <section
+                      className="detail-section"
+                      aria-labelledby="progress-label"
+                    >
+                      <h3 id="progress-label" className="section-label">
+                        Progress
+                      </h3>
+                      {selectedItem.progressKind === 'count' ? (
+                        <p className="detail-aggregate-progress">
+                          {selectedProgressLabel}. TV Time did not provide
+                          season or episode rows for this series in the selected
+                          export.
+                        </p>
+                      ) : (
+                        <div className="progress-stack">
+                          <div className="progress-line" aria-hidden="true">
+                            <span
+                              className="progress-bar"
+                              style={{ width: `${selectedProgress}%` }}
+                            />
+                          </div>
+                          <div className="progress-values">
+                            <span>{selectedProgressLabel}</span>
+                            <span>{selectedProgressPercent}%</span>
+                          </div>
+                        </div>
+                      )}
+                    </section>
+
+                    {selectedItem.category === 'Series' && (
+                      <section
+                        className="detail-section detail-series-overview"
+                        aria-labelledby="series-overview-label"
                       >
-                        Repository changelog
-                      </a>
+                        <div className="detail-series-overview-head">
+                          <div>
+                            <h3
+                              id="series-overview-label"
+                              className="section-label"
+                            >
+                              Seasons and episodes
+                            </h3>
+                            <p>
+                              {selectedEpisodes.length > 0
+                                ? `${selectedCompletedEpisodes} of ${selectedEpisodes.length} episodes watched`
+                                : 'No episode structure has been added yet.'}
+                            </p>
+                          </div>
+                          <button
+                            className="mini-btn"
+                            type="button"
+                            onClick={handleEditSelected}
+                          >
+                            Edit episodes
+                          </button>
+                        </div>
+
+                        {selectedSeasons.length > 0 ? (
+                          <div className="detail-season-list">
+                            {selectedSeasons.map((season) => {
+                              const watchedEpisodes = season.episodes.filter(
+                                (episode) => episode.completed,
+                              ).length;
+                              return (
+                                <section
+                                  className="detail-season-summary"
+                                  key={season.id}
+                                >
+                                  <div className="detail-season-summary-head">
+                                    <strong>{season.title}</strong>
+                                    <span>
+                                      {watchedEpisodes}/{season.episodes.length}{' '}
+                                      watched
+                                    </span>
+                                  </div>
+                                  {season.description && (
+                                    <p>{season.description}</p>
+                                  )}
+                                  <ul className="detail-episode-list">
+                                    {season.episodes.map((episode) => (
+                                      <li key={episode.id}>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setDetailView('expanded');
+                                            setSelectedEpisode({
+                                              seasonNumber: season.number,
+                                              episodeNumber: episode.number,
+                                            });
+                                          }}
+                                        >
+                                          <span aria-hidden="true">
+                                            {episode.completed ? '✓' : '○'}
+                                          </span>
+                                          <span>
+                                            E{episode.number} · {episode.title}
+                                          </span>
+                                        </button>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </section>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p className="detail-series-empty">
+                            {selectedItem.progressKind === 'count'
+                              ? `${selectedItem.progressText} were imported, but TV Time did not include individual season or episode rows for this series.`
+                              : 'Add seasons and episodes in edit mode to track them individually.'}
+                          </p>
+                        )}
+                      </section>
+                    )}
+
+                    <section
+                      className="detail-section"
+                      aria-labelledby="attributes-label"
+                    >
+                      <h3 id="attributes-label" className="section-label">
+                        Attributes
+                      </h3>
+                      <div
+                        className="attribute-list"
+                        aria-label="Item attributes"
+                      >
+                        <span className="attribute">
+                          Rating: {selectedItem.rating ?? 'Not rated'}
+                          {selectedItem.rating !== undefined ? '★' : ''}
+                        </span>
+                        <span className="attribute">
+                          Status: {STATUS_LABEL[selectedItem.status]}
+                        </span>
+                        <span className="attribute">
+                          Format: {selectedItem.meta}
+                        </span>
+                      </div>
+                    </section>
+
+                    <section
+                      className="detail-section"
+                      aria-labelledby="history-label"
+                    >
+                      <h3 id="history-label" className="section-label">
+                        Recent history
+                      </h3>
+                      <ul
+                        className="timeline"
+                        aria-label="Recent changes timeline"
+                      >
+                        {timeline
+                          .filter((entry) => entry.itemId === selectedItem.id)
+                          .slice(0, 3)
+                          .map((entry) => (
+                            <li key={entry.id}>{entry.summary}</li>
+                          ))}
+                        {timeline.every(
+                          (entry) => entry.itemId !== selectedItem.id,
+                        ) && <li>No changes recorded for this item yet.</li>}
+                      </ul>
+                    </section>
+                  </>
+                </div>
+              </aside>
+            </div>
+          ) : (
+            <div className="screen-panel">
+              {activeNav === 'collections' && (
+                <>
+                  <div className="screen-hero">
+                    <div>
+                      <span className="eyebrow">Collections</span>
+                      <h2>Curated shelves</h2>
+                      <p>
+                        Organize your tracked items by mood, format, and
+                        purpose.
+                      </p>
+                    </div>
+                    <button className="primary-btn" type="button">
+                      New collection
+                    </button>
+                  </div>
+                  <div className="screen-grid">
+                    <div className="summary-card">
+                      <span className="eyebrow">Total</span>
+                      <strong>{archive.collections.length}</strong>
+                      <span>Saved in your local archive</span>
+                    </div>
+                    <div className="summary-card">
+                      <span className="eyebrow">Featured</span>
+                      <strong>
+                        {
+                          archive.collections.filter(
+                            (collection) => collection.itemIds.length > 0,
+                          ).length
+                        }
+                      </strong>
+                      <span>Containing tracked items</span>
+                    </div>
+                    <div className="summary-card">
+                      <span className="eyebrow">Ready</span>
+                      <strong>
+                        {archive.collections.reduce(
+                          (total, collection) =>
+                            total + collection.itemIds.length,
+                          0,
+                        )}
+                      </strong>
+                      <span>Item references in total</span>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {activeNav === 'discover' && (
+                <>
+                  <div className="screen-hero discover-hero">
+                    <div>
+                      <span className="eyebrow">Discover</span>
+                      <h2>
+                        {preferences.displayName
+                          ? `Made for ${preferences.displayName}`
+                          : 'Make this library yours'}
+                      </h2>
+                      <p>
+                        {preferences.activities.length
+                          ? `Start with ${preferences.activities.join(', ')} and refine what you want to track.`
+                          : 'Choose what you enjoy in Settings to make discovery useful.'}
+                      </p>
+                    </div>
+                    <button
+                      className="primary-btn"
+                      type="button"
+                      onClick={openNewItemDrawer}
+                    >
+                      <Plus size={14} aria-hidden="true" />
+                      Add to library
+                    </button>
+                  </div>
+                  <div className="screen-grid discovery-grid">
+                    <div className="summary-card">
+                      <span className="eyebrow">Watch next</span>
+                      <strong>{upNextItems.length}</strong>
+                      <span>Items ready to continue</span>
+                    </div>
+                    <div className="summary-card">
+                      <span className="eyebrow">Your genres</span>
+                      <strong>
+                        {preferences.favoriteGenres.length || '—'}
+                      </strong>
+                      <span>
+                        {preferences.favoriteGenres.length
+                          ? preferences.favoriteGenres.join(' · ')
+                          : 'Set favourites in Settings'}
+                      </span>
+                    </div>
+                    <div className="summary-card">
+                      <span className="eyebrow">Local first</span>
+                      <strong>0</strong>
+                      <span>
+                        External recommendations until a provider is connected
+                      </span>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {activeNav === 'profile' && (
+                <>
+                  <div className="screen-hero profile-hero">
+                    <div>
+                      <span className="eyebrow">Profile</span>
+                      <h2>
+                        {preferences.displayName || 'Your personal archive'}
+                      </h2>
+                      <p>
+                        {preferences.activities.length
+                          ? `Tracking ${preferences.activities.join(', ')} locally.`
+                          : 'Set your tracking preferences to personalise this space.'}
+                      </p>
+                    </div>
+                    <button
+                      className="ghost-btn"
+                      type="button"
+                      onClick={() => setActiveNav('settings')}
+                    >
+                      Edit preferences
+                    </button>
+                  </div>
+                  <div className="screen-grid">
+                    <div className="summary-card">
+                      <span className="eyebrow">Tracked</span>
+                      <strong>{items.length}</strong>
+                      <span>Across your active categories</span>
+                    </div>
+                    <div className="summary-card">
+                      <span className="eyebrow">Finished</span>
+                      <strong>
+                        {
+                          items.filter((item) => item.status === 'completed')
+                            .length
+                        }
+                      </strong>
+                      <span>Saved in your history</span>
+                    </div>
+                    <div className="summary-card">
+                      <span className="eyebrow">Language</span>
+                      <strong>
+                        {preferences.locale === 'it' ? 'IT' : 'EN'}
+                      </strong>
+                      <span>Saved with your preferences</span>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {activeNav === 'history' && (
+                <>
+                  <div className="screen-hero">
+                    <div>
+                      <span className="eyebrow">History</span>
+                      <h2>Recent changes</h2>
+                      <p>Every update stays local and exportable.</p>
+                    </div>
+                    <button className="ghost-btn" type="button">
+                      Export log
+                    </button>
+                  </div>
+                  <div className="layout-warmup">
+                    <div className="content-card">
+                      <span className="eyebrow">Timeline</span>
+                      <ul className="timeline" aria-label="History timeline">
+                        {timeline.map((entry) => (
+                          <li key={entry.id}>{entry.summary}</li>
+                        ))}
+                        {timeline.length === 0 && (
+                          <li>No changes recorded yet.</li>
+                        )}
+                      </ul>
+                    </div>
+                    <div className="content-card">
+                      <span className="eyebrow">Summary</span>
+                      <div className="list-stack">
+                        <div className="mini-row">
+                          <div>
+                            <strong>{timeline.length} updates</strong>
+                            <br />
+                            <small>This week</small>
+                          </div>
+                        </div>
+                        <div className="mini-row">
+                          <div>
+                            <strong>
+                              {
+                                timeline.filter(
+                                  (entry) => entry.action === 'imported',
+                                ).length
+                              }{' '}
+                              imports
+                            </strong>
+                            <br />
+                            <small>Last 30 days</small>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {activeNav === 'export' && (
+                <>
+                  <div className="screen-hero">
+                    <div>
+                      <span className="eyebrow">Export</span>
+                      <h2>Share your archive</h2>
+                      <p>
+                        Keep everything in a durable, readable format you own.
+                      </p>
+                    </div>
+                    <button
+                      className="primary-btn"
+                      type="button"
+                      onClick={handleExportBackup}
+                    >
+                      Export now
+                    </button>
+                  </div>
+                  {backupStatus && activeNav === 'export' && (
+                    <p className="empty-state" role="status">
+                      {backupStatus}
+                    </p>
+                  )}
+                  <div className="screen-grid">
+                    <div className="summary-card">
+                      <span className="eyebrow">Last export</span>
+                      <strong>On demand</strong>
+                      <span>
+                        Download a complete archive whenever you need one
+                      </span>
+                    </div>
+                    <div className="summary-card">
+                      <span className="eyebrow">Format</span>
+                      <strong>JSON</strong>
+                      <span>Portable, inspectable, re-importable</span>
+                    </div>
+                    <div className="summary-card">
+                      <span className="eyebrow">Backup</span>
+                      <strong>Local</strong>
+                      <span>Export creates a copy you control</span>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {activeNav === 'settings' && (
+                <>
+                  <div className="screen-hero">
+                    <div>
+                      <span className="eyebrow">Settings</span>
+                      <h2>Preferences</h2>
+                      <p>Keep the app local-first and comfy to use.</p>
+                    </div>
+                    <button className="ghost-btn" type="button">
+                      Reset defaults
+                    </button>
+                  </div>
+                  <div className="setting-card">
+                    <h3>Appearance</h3>
+                    <div className="theme-switch" aria-label="Theme switcher">
+                      {(['auto', 'light', 'dark'] as const).map((mode) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          className={`theme-btn ${themeMode === mode ? 'is-active' : ''}`}
+                          data-theme-option={mode}
+                          onClick={() => setThemeMode(mode)}
+                        >
+                          {mode === 'auto'
+                            ? 'Auto'
+                            : mode === 'light'
+                              ? 'Light'
+                              : 'Dark'}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="setting-row">
+                      <div>
+                        <strong>Language</strong>
+                        <br />
+                        <small>
+                          Used for your app preferences and future catalog
+                          results
+                        </small>
+                      </div>
+                      <select
+                        className="setting-select"
+                        value={preferences.locale}
+                        onChange={(event) =>
+                          savePreferences({
+                            ...preferences,
+                            locale: event.target
+                              .value as UserPreferences['locale'],
+                          })
+                        }
+                      >
+                        <option value="en">English</option>
+                        <option value="it">Italiano</option>
+                      </select>
+                    </div>
+                    <div className="setting-row">
+                      <div>
+                        <strong>Follow system theme</strong>
+                        <br />
+                        <small>Sync with your computer settings</small>
+                      </div>
+                      <label className="switch">
+                        <input
+                          type="checkbox"
+                          checked={themeMode === 'auto'}
+                          onChange={(event) =>
+                            setThemeMode(event.target.checked ? 'auto' : 'dark')
+                          }
+                        />
+                        <i />
+                      </label>
+                    </div>
+                    <div className="setting-row">
+                      <div>
+                        <strong>Placeholder covers</strong>
+                        <br />
+                        <small>
+                          Use a neutral cover when an item has no artwork
+                        </small>
+                      </div>
+                      <label className="switch">
+                        <input
+                          type="checkbox"
+                          checked={preferences.placeholderCovers}
+                          onChange={(event) =>
+                            void savePreferences({
+                              ...preferences,
+                              placeholderCovers: event.target.checked,
+                            })
+                          }
+                        />
+                        <i />
+                      </label>
+                    </div>
+                    <div className="setting-row">
+                      <div>
+                        <strong>Compact cards</strong>
+                        <br />
+                        <small>Denser list layout</small>
+                      </div>
+                      <label className="switch">
+                        <input type="checkbox" />
+                        <i />
+                      </label>
+                    </div>
+                    <div className="setting-row setting-row--stacked">
+                      <div>
+                        <strong>Roadmap</strong>
+                        <br />
+                        <small>See what is coming next</small>
+                      </div>
                       <a
                         className="inline-link"
                         href={ROADMAP_URL}
                         target="_blank"
                         rel="noreferrer noopener"
                       >
-                        Roadmap
+                        Open roadmap
                       </a>
                     </div>
-                  </div>
-                </div>
-              </>
-            )}
-
-            {activeNav === 'import' && (
-              <>
-                <div className="screen-hero">
-                  <div>
-                    <span className="eyebrow">Restore</span>
-                    <h2>Restore a local backup</h2>
-                    <p>
-                      Choose a JSON backup exported by this app. It is validated
-                      before it can replace your current local archive.
-                    </p>
-                  </div>
-                  <button
-                    className="primary-btn"
-                    type="button"
-                    onClick={() => restoreInput.current?.click()}
-                  >
-                    Select backup
-                  </button>
-                  <input
-                    ref={restoreInput}
-                    type="file"
-                    accept="application/json,.json"
-                    aria-label="Select an Open Personal Tracking JSON backup"
-                    onChange={(event) => void handleRestoreBackup(event)}
-                    hidden
-                  />
-                </div>
-                <p className="empty-state">
-                  Restoring replaces the current archive only after the backup
-                  passes migration and validation. Invalid or unsupported files
-                  leave your current data unchanged.
-                </p>
-                {backupStatus && (
-                  <p className="empty-state" role="status">
-                    {backupStatus}
-                  </p>
-                )}
-                <section
-                  className="content-card tvtime-import-card"
-                  aria-labelledby="tvTimeImportTitle"
-                >
-                  <div className="tvtime-import-head">
-                    <Image
-                      className="tvtime-import-logo"
-                      src="/images/tvtime-logo.png"
-                      alt="TV Time"
-                      width={48}
-                      height={48}
-                    />
-                    <div>
-                      <span className="eyebrow">TV Time import</span>
-                      <h3 id="tvTimeImportTitle">Bring your history home</h3>
+                    <div className="setting-row setting-row--stacked">
+                      <div>
+                        <strong>Report a bug</strong>
+                        <br />
+                        <small>Share a quick issue with the team</small>
+                      </div>
+                      <button
+                        type="button"
+                        className="mini-btn"
+                        onClick={handleReportBug}
+                      >
+                        Report
+                      </button>
+                    </div>
+                    <div className="setting-card app-about-card">
+                      <span className="eyebrow">About this app</span>
+                      <h3>Preview build</h3>
                       <p>
-                        Import a TV Time GDPR export without sharing it with
-                        another service.
+                        This local-first preview is not a published release yet.
+                        Published release notes will appear here once the
+                        project ships tagged versions.
+                      </p>
+                      <div className="app-about-actions">
+                        <a
+                          className="inline-link"
+                          href={CHANGELOG_URL}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                        >
+                          Repository changelog
+                        </a>
+                        <a
+                          className="inline-link"
+                          href={ROADMAP_URL}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                        >
+                          Roadmap
+                        </a>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {activeNav === 'import' && (
+                <>
+                  <div className="screen-hero">
+                    <div>
+                      <span className="eyebrow">Restore</span>
+                      <h2>Restore a local backup</h2>
+                      <p>
+                        Choose a JSON backup exported by this app. It is
+                        validated before it can replace your current local
+                        archive.
                       </p>
                     </div>
-                    <span className="tvtime-import-status">
-                      {tvTimePreview ? 'Ready to review' : 'Local only'}
-                    </span>
-                  </div>
-                  <ol className="tvtime-import-steps">
-                    <li>
-                      <strong>1. Choose your export</strong>
-                      <span>
-                        Use the GDPR ZIP file, or its extracted CSV files.
-                      </span>
-                    </li>
-                    <li>
-                      <strong>2. Review safely</strong>
-                      <span>
-                        See supported data, limitations, and duplicates first.
-                      </span>
-                    </li>
-                    <li>
-                      <strong>3. Confirm the import</strong>
-                      <span>
-                        Your current archive stays unchanged until confirmation.
-                      </span>
-                    </li>
-                  </ol>
-                  <div className="tvtime-import-actions">
                     <button
                       className="primary-btn"
                       type="button"
-                      onClick={() => tvTimeInput.current?.click()}
+                      onClick={() => restoreInput.current?.click()}
                     >
-                      Choose TV Time export
+                      Select backup
                     </button>
-                    <span>ZIP recommended · CSV also supported</span>
+                    <input
+                      ref={restoreInput}
+                      type="file"
+                      accept="application/json,.json"
+                      aria-label="Select an Open Personal Tracking JSON backup"
+                      onChange={(event) => void handleRestoreBackup(event)}
+                      hidden
+                    />
                   </div>
-                  <input
-                    ref={tvTimeInput}
-                    type="file"
-                    accept="application/zip,.zip,text/csv,.csv"
-                    aria-label="Select TV Time ZIP or CSV files"
-                    multiple
-                    onChange={(event) => void handleTvTimeFiles(event)}
-                    hidden
-                  />
-                  <p className="field-help tvtime-import-help">
-                    Processed only in this browser. Supported source tables are
-                    checked before your archive can change.
+                  <p className="empty-state">
+                    Restoring replaces the current archive only after the backup
+                    passes migration and validation. Invalid or unsupported
+                    files leave your current data unchanged.
                   </p>
-                </section>
-
-                {tvTimePreview && (
+                  {backupStatus && (
+                    <p className="empty-state" role="status">
+                      {backupStatus}
+                    </p>
+                  )}
                   <section
-                    className="content-card tvtime-preview-card"
-                    aria-labelledby="tvTimePreviewTitle"
+                    className="content-card tvtime-import-card"
+                    aria-labelledby="tvTimeImportTitle"
                   >
-                    <div className="tvtime-preview-head">
+                    <div className="tvtime-import-head">
+                      <Image
+                        className="tvtime-import-logo"
+                        src="/images/tvtime-logo.png"
+                        alt="TV Time"
+                        width={48}
+                        height={48}
+                      />
                       <div>
-                        <span className="eyebrow">Step 2 of 3 · Preview</span>
-                        <h3 id="tvTimePreviewTitle">Review TV Time import</h3>
+                        <span className="eyebrow">TV Time import</span>
+                        <h3 id="tvTimeImportTitle">Bring your history home</h3>
                         <p>
-                          Nothing has changed in your archive yet. Confirm only
-                          after reviewing the summary below.
+                          Import a TV Time GDPR export without sharing it with
+                          another service.
                         </p>
                       </div>
-                      <span className="tvtime-preview-safe">
-                        No changes yet
+                      <span className="tvtime-import-status">
+                        {tvTimePreview ? 'Ready to review' : 'Local only'}
                       </span>
                     </div>
-                    <dl className="tvtime-preview-summary">
-                      <div>
-                        <dt>Ready to import</dt>
-                        <dd>
-                          {tvTimePreview.items.length}{' '}
-                          {tvTimePreview.items.length === 1 ? 'item' : 'items'}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>Recognised source</dt>
-                        <dd>
-                          {tvTimePreview.files.length}{' '}
-                          {tvTimePreview.files.length === 1 ? 'file' : 'files'}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>Episodes found</dt>
-                        <dd>
-                          {tvTimePreview.seriesStructure.episodeCount > 0
-                            ? `${tvTimePreview.seriesStructure.episodeCount} across ${tvTimePreview.seriesStructure.seasonCount} ${tvTimePreview.seriesStructure.seasonCount === 1 ? 'season' : 'seasons'}`
-                            : 'None in selected files'}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>Needs attention</dt>
-                        <dd>
-                          {tvTimePreview.conflicts.length +
-                            tvTimePreview.warnings.length}{' '}
-                          notes
-                        </dd>
-                      </div>
-                    </dl>
-                    {tvTimePreview.seriesStructure.episodeCount > 0 && (
-                      <p className="tvtime-preview-structure">
-                        {tvTimePreview.seriesStructure.episodeCount} watched{' '}
-                        {tvTimePreview.seriesStructure.episodeCount === 1
-                          ? 'episode'
-                          : 'episodes'}{' '}
-                        will be added to{' '}
-                        {tvTimePreview.seriesStructure.seriesCount}{' '}
-                        {tvTimePreview.seriesStructure.seriesCount === 1
-                          ? 'series'
-                          : 'series'}
-                        . To add them to a matching series already in your
-                        library, choose “Update their TV Time progress and
-                        status” below.
-                      </p>
-                    )}
-                    {tvTimePreview.conflicts.length > 0 && (
-                      <fieldset className="setting-row">
-                        <legend>Matching local items</legend>
-                        <p>
-                          {tvTimePreview.conflicts.length}{' '}
-                          {tvTimePreview.conflicts.length === 1
-                            ? 'duplicate was'
-                            : 'duplicates were'}{' '}
-                          found. Choose how to handle them before importing.
-                        </p>
-                        <label>
-                          <input
-                            type="radio"
-                            name="tv-time-duplicate-resolution"
-                            checked={tvTimeDuplicateResolution === 'skip'}
-                            onChange={() => {
-                              setTvTimeDuplicateResolution('skip');
-                              showTvTimeImportFeedback({
-                                kind: 'warning',
-                                title: 'Skip matching items selected',
-                                message:
-                                  'Click Confirm import to apply this choice.',
-                              });
-                            }}
-                          />{' '}
-                          Skip matching items
-                        </label>
-                        <label>
-                          <input
-                            type="radio"
-                            name="tv-time-duplicate-resolution"
-                            checked={tvTimeDuplicateResolution === 'update'}
-                            onChange={() => {
-                              setTvTimeDuplicateResolution('update');
-                              showTvTimeImportFeedback({
-                                kind: 'warning',
-                                title: 'Update matching items selected',
-                                message:
-                                  'Click Confirm import to apply this choice.',
-                              });
-                            }}
-                          />{' '}
-                          Update their TV Time progress and status, keeping
-                          local notes and collections
-                        </label>
-                      </fieldset>
-                    )}
-                    {tvTimePreview.warnings.length > 0 && (
-                      <section
-                        className="tvtime-preview-notes"
-                        aria-labelledby="tvTimeImportNotes"
-                      >
-                        <h4 id="tvTimeImportNotes">
-                          What will not be imported
-                        </h4>
-                        <ul>
-                          {tvTimePreview.warnings.map((warning) => (
-                            <li key={warning}>{warning}</li>
-                          ))}
-                        </ul>
-                      </section>
-                    )}
-                    <div className="inline-actions">
+                    <ol className="tvtime-import-steps">
+                      <li>
+                        <strong>1. Choose your export</strong>
+                        <span>
+                          Use the GDPR ZIP file, or its extracted CSV files.
+                        </span>
+                      </li>
+                      <li>
+                        <strong>2. Review safely</strong>
+                        <span>
+                          See supported data, limitations, and duplicates first.
+                        </span>
+                      </li>
+                      <li>
+                        <strong>3. Confirm the import</strong>
+                        <span>
+                          Your current archive stays unchanged until
+                          confirmation.
+                        </span>
+                      </li>
+                    </ol>
+                    <div className="tvtime-import-actions">
                       <button
                         className="primary-btn"
                         type="button"
-                        onClick={() => void handleTvTimeImport()}
-                        disabled={isTvTimeImporting}
+                        onClick={() => tvTimeInput.current?.click()}
                       >
-                        {isTvTimeImporting
-                          ? 'Importing…'
-                          : tvTimeDuplicateResolution === 'update'
-                            ? 'Confirm import and update matches'
-                            : 'Confirm import and skip matches'}
+                        Choose TV Time export
                       </button>
-                      <button
-                        className="ghost-btn"
-                        type="button"
-                        onClick={() => setTvTimePreview(null)}
-                      >
-                        Cancel
-                      </button>
+                      <span>ZIP recommended · CSV also supported</span>
                     </div>
+                    <input
+                      ref={tvTimeInput}
+                      type="file"
+                      accept="application/zip,.zip,text/csv,.csv"
+                      aria-label="Select TV Time ZIP or CSV files"
+                      multiple
+                      onChange={(event) => void handleTvTimeFiles(event)}
+                      hidden
+                    />
+                    <p className="field-help tvtime-import-help">
+                      Processed only in this browser. Supported source tables
+                      are checked before your archive can change.
+                    </p>
                   </section>
-                )}
-              </>
-            )}
-          </div>
-        )}
+
+                  {tvTimePreview && (
+                    <section
+                      className="content-card tvtime-preview-card"
+                      aria-labelledby="tvTimePreviewTitle"
+                    >
+                      <div className="tvtime-preview-head">
+                        <div>
+                          <span className="eyebrow">Step 2 of 3 · Preview</span>
+                          <h3 id="tvTimePreviewTitle">Review TV Time import</h3>
+                          <p>
+                            Nothing has changed in your archive yet. Confirm
+                            only after reviewing the summary below.
+                          </p>
+                        </div>
+                        <span className="tvtime-preview-safe">
+                          No changes yet
+                        </span>
+                      </div>
+                      <dl className="tvtime-preview-summary">
+                        <div>
+                          <dt>Ready to import</dt>
+                          <dd>
+                            {tvTimePreview.items.length}{' '}
+                            {tvTimePreview.items.length === 1
+                              ? 'item'
+                              : 'items'}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Recognised source</dt>
+                          <dd>
+                            {tvTimePreview.files.length}{' '}
+                            {tvTimePreview.files.length === 1
+                              ? 'file'
+                              : 'files'}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Episodes found</dt>
+                          <dd>
+                            {tvTimePreview.seriesStructure.episodeCount > 0
+                              ? `${tvTimePreview.seriesStructure.episodeCount} across ${tvTimePreview.seriesStructure.seasonCount} ${tvTimePreview.seriesStructure.seasonCount === 1 ? 'season' : 'seasons'}`
+                              : 'None in selected files'}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Needs attention</dt>
+                          <dd>
+                            {tvTimePreview.conflicts.length +
+                              tvTimePreview.warnings.length}{' '}
+                            notes
+                          </dd>
+                        </div>
+                      </dl>
+                      {tvTimePreview.seriesStructure.episodeCount > 0 && (
+                        <p className="tvtime-preview-structure">
+                          {tvTimePreview.seriesStructure.episodeCount} watched{' '}
+                          {tvTimePreview.seriesStructure.episodeCount === 1
+                            ? 'episode'
+                            : 'episodes'}{' '}
+                          will be added to{' '}
+                          {tvTimePreview.seriesStructure.seriesCount}{' '}
+                          {tvTimePreview.seriesStructure.seriesCount === 1
+                            ? 'series'
+                            : 'series'}
+                          . To add them to a matching series already in your
+                          library, choose “Update their TV Time progress and
+                          status” below.
+                        </p>
+                      )}
+                      {tvTimePreview.conflicts.length > 0 && (
+                        <fieldset className="setting-row">
+                          <legend>Matching local items</legend>
+                          <p>
+                            {tvTimePreview.conflicts.length}{' '}
+                            {tvTimePreview.conflicts.length === 1
+                              ? 'duplicate was'
+                              : 'duplicates were'}{' '}
+                            found. Choose how to handle them before importing.
+                          </p>
+                          <label>
+                            <input
+                              type="radio"
+                              name="tv-time-duplicate-resolution"
+                              checked={tvTimeDuplicateResolution === 'skip'}
+                              onChange={() => {
+                                setTvTimeDuplicateResolution('skip');
+                                showTvTimeImportFeedback({
+                                  kind: 'warning',
+                                  title: 'Skip matching items selected',
+                                  message:
+                                    'Click Confirm import to apply this choice.',
+                                });
+                              }}
+                            />{' '}
+                            Skip matching items
+                          </label>
+                          <label>
+                            <input
+                              type="radio"
+                              name="tv-time-duplicate-resolution"
+                              checked={tvTimeDuplicateResolution === 'update'}
+                              onChange={() => {
+                                setTvTimeDuplicateResolution('update');
+                                showTvTimeImportFeedback({
+                                  kind: 'warning',
+                                  title: 'Update matching items selected',
+                                  message:
+                                    'Click Confirm import to apply this choice.',
+                                });
+                              }}
+                            />{' '}
+                            Update their TV Time progress and status, keeping
+                            local notes and collections
+                          </label>
+                        </fieldset>
+                      )}
+                      {tvTimePreview.warnings.length > 0 && (
+                        <section
+                          className="tvtime-preview-notes"
+                          aria-labelledby="tvTimeImportNotes"
+                        >
+                          <h4 id="tvTimeImportNotes">
+                            What will not be imported
+                          </h4>
+                          <ul>
+                            {tvTimePreview.warnings.map((warning) => (
+                              <li key={warning}>{warning}</li>
+                            ))}
+                          </ul>
+                        </section>
+                      )}
+                      <div className="inline-actions">
+                        <button
+                          className="primary-btn"
+                          type="button"
+                          onClick={() => void handleTvTimeImport()}
+                          disabled={isTvTimeImporting}
+                        >
+                          {isTvTimeImporting
+                            ? 'Importing…'
+                            : tvTimeDuplicateResolution === 'update'
+                              ? 'Confirm import and update matches'
+                              : 'Confirm import and skip matches'}
+                        </button>
+                        <button
+                          className="ghost-btn"
+                          type="button"
+                          onClick={() => setTvTimePreview(null)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </section>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </main>
 
       <nav className="bottom-nav" aria-label="Primary navigation">
