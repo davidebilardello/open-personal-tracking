@@ -201,6 +201,22 @@ The first milestone is complete when a user can:
 12. Restore the backup.
 13. Recover the same state.
 
+## Item entry validation
+
+The creation/editing drawer identifies the title as required and explains that
+ratings are optional numbers from 0 to 5, including decimals. On an invalid
+submission, field messages describe corrections, are associated with their
+controls, and focus moves to the first invalid control. A live alert inside the
+drawer announces the validation failure or a failed save. Correcting fields
+updates their feedback; cancelling or opening another draft clears old errors.
+
+Series with tracking require titled seasons containing at least one titled
+episode. Series without seasons remain valid. Incomplete numeric input must not
+be silently treated as an omitted rating. Validation and save failures retain
+the draft; validation failures leave the persisted archive unchanged. These
+presentation checks supplement the authoritative archive schemas and do not
+change the backup format or persisted data contract.
+
 ## Explicit non-goals for MVP
 
 Do not implement initially:

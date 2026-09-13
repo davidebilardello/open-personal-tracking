@@ -3638,3 +3638,24 @@ section.copy .muted {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* Keep validation feedback in the scrollable item drawer. */
+.add-drawer .field-control[aria-invalid='true'] {
+  border-color: var(--stamp);
+  border-width: 2px;
+}
+
+.field-error,
+.drawer-feedback {
+  color: var(--ink);
+  border-inline-start: 3px solid var(--stamp);
+  padding-inline-start: 0.65rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.drawer-feedback:empty {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
