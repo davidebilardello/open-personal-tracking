@@ -18,6 +18,8 @@ The format follows [Keep a Changelog 2.0.0](https://keepachangelog.com/en/2.0.0/
   descriptions and image URLs at both levels.
 - A browser-local TV Time GDPR export importer with ZIP support, a safe preview,
   conflict choices, and documented source limitations.
+- A browser-local IMDb CSV importer with preview, explicit duplicate choices,
+  validated mappings for watchlists and ratings, and documented limitations.
 - A reusable favicon configuration for the Next.js site and app shell.
 - Browser-local archive persistence for the app shell, including persisted items, preferences, progress, and history.
 

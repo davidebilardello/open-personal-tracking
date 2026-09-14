@@ -296,7 +296,7 @@ test('previews and imports a TV Time GDPR ZIP export locally', async ({
     '1 item was saved to this device.',
   );
   await importFeedback
-    .getByRole('button', { name: 'Dismiss TV Time import notification' })
+    .getByRole('button', { name: 'Dismiss import notification' })
     .click();
   await expect(importFeedback).toBeHidden();
 
@@ -309,6 +309,84 @@ test('previews and imports a TV Time GDPR ZIP export locally', async ({
   await itemInList(page, 'TV Time fixture').click();
   await expect(page.getByText('Season 1', { exact: true })).toBeVisible();
   await expect(page.getByText('E4 · Episode 4')).toBeVisible();
+});
+
+test('previews and imports an IMDb CSV export locally', async ({ page }) => {
+  const imdbCsvHeader =
+    'Position,Const,Created,Modified,Description,Title,Original Title,URL,Title Type,IMDb Rating,Runtime (mins),Year,Genres,Num Votes,Release Date,Directors,Your Rating,Date Rated';
+  const imdbCsvRows = Array.from({ length: 21 }, (_, index) => {
+    const position = index + 1;
+    const imdbId = `tt${String(position).padStart(7, '0')}`;
+    return [
+      position,
+      imdbId,
+      '2024-01-01',
+      '2024-01-01',
+      '',
+      `IMDb fixture ${position}`,
+      `IMDb fixture ${position}`,
+      `https://www.imdb.com/title/${imdbId}/`,
+      'Film',
+      '',
+      '',
+      '2024',
+      'Drama',
+      '',
+      '',
+      '',
+      '',
+      '',
+    ].join(',');
+  });
+
+  await openManagePage(page, 'Import');
+  await expect(page.getByAltText('IMDb')).toBeVisible();
+  await page.getByLabel('Select an IMDb CSV export').setInputFiles({
+    name: 'imdb-watchlist.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from(`${imdbCsvHeader}\n${imdbCsvRows.join('\n')}\n`),
+  });
+
+  await expect(
+    page.getByRole('heading', { name: 'Review IMDb import' }),
+  ).toBeVisible();
+  await expect(page.getByText('21 items', { exact: true })).toBeVisible();
+  await page
+    .getByRole('button', { name: 'Confirm import and skip matches' })
+    .click();
+  const importFeedback = page.getByRole('status').filter({
+    hasText: 'IMDb import complete',
+  });
+  await expect(importFeedback).toContainText(
+    '21 items were saved to this device.',
+  );
+
+  await page
+    .getByRole('navigation', { name: 'Primary navigation' })
+    .getByRole('button', { name: /^Library/ })
+    .first()
+    .click();
+  await expect(page.getByText('Page 1 of 2')).toBeVisible();
+  await expect(
+    page.locator('.panel-header').getByLabel('Library pagination'),
+  ).toBeVisible();
+  await expect(itemInList(page, 'IMDb fixture 1')).toBeVisible();
+  await expect(itemInList(page, 'IMDb fixture 21')).toBeHidden();
+  await expect(page.locator('.group-head', { hasText: 'Finished' })).toHaveText(
+    /Finished\s*21 total/,
+  );
+  await itemInList(page, 'IMDb fixture 1').click();
+  await expect(
+    page.getByRole('link', {
+      name: 'https://www.imdb.com/title/tt0000001/',
+    }),
+  ).toHaveAttribute('href', 'https://www.imdb.com/title/tt0000001/');
+  await expect(
+    page.getByRole('link', { name: 'Open on IMDb' }).first(),
+  ).toHaveAttribute('href', 'https://www.imdb.com/title/tt0000001/');
+  await expect(page.getByText('Genres: Drama')).toBeVisible();
+  await page.getByRole('button', { name: 'Next', exact: true }).click();
+  await expect(itemInList(page, 'IMDb fixture 21')).toBeVisible();
 });
 
 test('creates a series with season and episode details', async ({ page }) => {
@@ -380,16 +458,16 @@ test('paginates a large library and reconciles search results', async ({
   ).toBeVisible();
   await expect(itemInList(page, 'Pagination item 01')).toBeVisible();
   await expect(itemInList(page, 'Pagination item 21')).toBeHidden();
-  await expect(page.getByLabel('Item list').locator('article')).toHaveCount(24);
+  await expect(page.getByLabel('Item list').locator('article')).toHaveCount(20);
   await expect(
     page.locator('.group-head', { hasText: 'Continuing' }),
-  ).toHaveText(/Continuing\s*20 of 21/);
-  await expect(page.locator('.group-head', { hasText: 'Planned' })).toHaveText(
-    /Planned\s*2/,
-  );
-  await expect(page.locator('.group-head', { hasText: 'Finished' })).toHaveText(
-    /Finished\s*2/,
-  );
+  ).toHaveText(/Continuing\s*21 total/);
+  await expect(
+    page.locator('.group-head', { hasText: 'Planned' }),
+  ).toBeHidden();
+  await expect(
+    page.locator('.group-head', { hasText: 'Finished' }),
+  ).toBeHidden();
 
   await itemInList(page, 'Pagination item 01').click();
   await expect(
@@ -401,7 +479,13 @@ test('paginates a large library and reconciles search results', async ({
   await expect(page.getByLabel('Item list').locator('article')).toHaveCount(5);
   await expect(
     page.locator('.group-head', { hasText: 'Continuing' }),
-  ).toHaveText(/Continuing\s*1 of 21/);
+  ).toHaveText(/Continuing\s*21 total/);
+  await expect(page.locator('.group-head', { hasText: 'Planned' })).toHaveText(
+    /Planned\s*2 total/,
+  );
+  await expect(page.locator('.group-head', { hasText: 'Finished' })).toHaveText(
+    /Finished\s*2 total/,
+  );
   await expect(
     page.getByRole('complementary', { name: 'Selected item details' }),
   ).toBeVisible();
