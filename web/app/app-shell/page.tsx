@@ -45,6 +45,12 @@ import {
   type TvTimeDuplicateResolution,
   type TvTimeImportPreview,
 } from '../../../src/import/tv-time';
+import {
+  applyImdbImport,
+  previewImdbImport,
+  type ImdbDuplicateResolution,
+  type ImdbImportPreview,
+} from '../../../src/import/imdb';
 import { ConnectionStatus } from '../connection-status';
 
 type Episode = {
@@ -109,6 +115,8 @@ type TrackedItem = {
   progressKind: 'percent' | 'count';
   progressText: string;
   description: string;
+  genres: string[];
+  imdbUrl?: string;
   tags: string[];
   rating?: number;
   seasons?: SeriesSeason[];
@@ -246,6 +254,33 @@ const stringAttribute = (item: Item, key: string): string | undefined => {
   return typeof value === 'string' ? value : undefined;
 };
 
+const listAttribute = (item: Item, key: string): string[] =>
+  stringAttribute(item, key)
+    ?.split(',')
+    .map((value) => value.trim())
+    .filter(Boolean) ?? [];
+
+const imdbUrlFor = (item: Item): string | undefined => {
+  const storedUrl = stringAttribute(item, 'imdbUrl');
+  if (storedUrl) return storedUrl;
+
+  const imdbId = item.externalIds.imdb;
+  return imdbId && /^tt\d+$/i.test(imdbId)
+    ? `https://www.imdb.com/title/${imdbId}/`
+    : undefined;
+};
+
+const renderDescription = (description: string) =>
+  description.split(/(https?:\/\/[^\s]+)/g).map((part, index) =>
+    /^https?:\/\//.test(part) ? (
+      <a key={`${part}-${index}`} href={part} target="_blank" rel="noreferrer">
+        {part}
+      </a>
+    ) : (
+      part
+    ),
+  );
+
 const orderedByPosition = <T extends { position?: number }>(items: T[]): T[] =>
   [...items].sort(
     (left, right) =>
@@ -332,6 +367,8 @@ const toTrackedItem = (
       ? `${item.progress.current} episodes watched`
       : `${Math.round(value)}% complete`,
     description: item.description ?? '',
+    genres: listAttribute(item, 'imdbGenres'),
+    imdbUrl: imdbUrlFor(item),
     tags: item.tags,
     rating: item.rating,
     seasons: item.category === 'Series' ? toSeriesSeasons(item) : undefined,
@@ -353,6 +390,8 @@ const noSelection: TrackedItem = {
   progressKind: 'percent',
   progressText: '0% complete',
   description: 'Select an item to see its details.',
+  genres: [],
+  imdbUrl: undefined,
   tags: [],
 };
 
@@ -452,10 +491,17 @@ export default function AppShellPage() {
   const [isTvTimeImportFeedbackExiting, setIsTvTimeImportFeedbackExiting] =
     useState(false);
   const [isTvTimeImporting, setIsTvTimeImporting] = useState(false);
+  const [imdbPreview, setImdbPreview] = useState<ImdbImportPreview | null>(
+    null,
+  );
+  const [imdbDuplicateResolution, setImdbDuplicateResolution] =
+    useState<ImdbDuplicateResolution>('skip');
+  const [isImdbImporting, setIsImdbImporting] = useState(false);
   const application = useRef<ArchiveApplication | null>(null);
   const mainPanel = useRef<HTMLElement | null>(null);
   const restoreInput = useRef<HTMLInputElement | null>(null);
   const tvTimeInput = useRef<HTMLInputElement | null>(null);
+  const imdbInput = useRef<HTMLInputElement | null>(null);
   const preferenceSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const preferenceSaveRevision = useRef(0);
 
@@ -998,6 +1044,80 @@ export default function AppShellPage() {
     }
   };
 
+  const handleImdbFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !archive) return;
+    try {
+      const preview = previewImdbImport(
+        { name: file.name, text: await file.text() },
+        archive,
+      );
+      setImdbPreview(preview);
+      setImdbDuplicateResolution('skip');
+      setOperationError(null);
+      setBackupStatus(null);
+      setTvTimeImportFeedback(null);
+      setIsTvTimeImportFeedbackExiting(false);
+    } catch (error) {
+      setImdbPreview(null);
+      showTvTimeImportFeedback({
+        kind: 'error',
+        title: 'IMDb import could not start',
+        message:
+          error instanceof Error
+            ? `Your local archive was not changed: ${error.message}`
+            : 'Your local archive was not changed.',
+      });
+    }
+  };
+
+  const handleImdbImport = async () => {
+    if (!archive || !application.current || !imdbPreview || isImdbImporting)
+      return;
+    setIsImdbImporting(true);
+    showTvTimeImportFeedback({
+      kind: 'warning',
+      title: 'Importing IMDb data',
+      message: 'Your archive is being validated before local data is updated.',
+    });
+    try {
+      const prepared = applyImdbImport(
+        archive,
+        imdbPreview,
+        imdbDuplicateResolution,
+      );
+      const restored = await application.current.restoreBackup(prepared);
+      const importedCount =
+        imdbPreview.items.length -
+        (imdbDuplicateResolution === 'skip' ? imdbPreview.conflicts.length : 0);
+      setArchive(restored);
+      setImdbPreview(null);
+      showTvTimeImportFeedback({
+        kind: importedCount > 0 ? 'success' : 'warning',
+        title:
+          importedCount > 0
+            ? 'IMDb import complete'
+            : 'No IMDb items were imported',
+        message:
+          importedCount > 0
+            ? `${importedCount} ${importedCount === 1 ? 'item was' : 'items were'} saved to this device.`
+            : 'Matching items were skipped, so your local archive was not changed.',
+      });
+    } catch (error) {
+      showTvTimeImportFeedback({
+        kind: 'error',
+        title: 'IMDb import failed',
+        message:
+          error instanceof Error
+            ? `Your local archive was not changed: ${error.message}`
+            : 'Your local archive was not changed.',
+      });
+    } finally {
+      setIsImdbImporting(false);
+    }
+  };
+
   const recordEpisodeWatch = async (episodeId: string) => {
     if (!archive || !application.current || !selectedDomainItem) return;
 
@@ -1029,21 +1149,18 @@ export default function AppShellPage() {
   const continuingItems = visibleItems.filter(
     (item) => item.status === 'progress',
   );
-  const libraryPageCount = getPageCount(
-    continuingItems.length,
-    LIBRARY_PAGE_SIZE,
-  );
+  const libraryPageCount = getPageCount(visibleItems.length, LIBRARY_PAGE_SIZE);
   const currentLibraryPage = clampPage(
     libraryPage,
-    continuingItems.length,
+    visibleItems.length,
     LIBRARY_PAGE_SIZE,
   );
-  const paginatedContinuingItems = useMemo(
-    () => paginate(continuingItems, currentLibraryPage, LIBRARY_PAGE_SIZE),
-    [continuingItems, currentLibraryPage],
+  const paginatedVisibleItems = useMemo(
+    () => paginate(visibleItems, currentLibraryPage, LIBRARY_PAGE_SIZE),
+    [visibleItems, currentLibraryPage],
   );
 
-  const upNextItems = paginatedContinuingItems;
+  const upNextItems = continuingItems.slice(0, LIBRARY_PAGE_SIZE);
   const timeline = archive ? getHistoryTimeline(archive.history) : [];
   const isLibrary = activeNav === 'library';
 
@@ -1208,7 +1325,7 @@ export default function AppShellPage() {
             className="connection-status-dismiss"
             type="button"
             onClick={dismissTvTimeImportFeedback}
-            aria-label="Dismiss TV Time import notification"
+            aria-label="Dismiss import notification"
           >
             <X aria-hidden="true" />
           </button>
@@ -1466,13 +1583,13 @@ export default function AppShellPage() {
                       )}
                     </div>
 
-                    {continuingItems.length > 0 && libraryPageCount > 1 && (
+                    {visibleItems.length > 0 && libraryPageCount > 1 && (
                       <LibraryPagination
                         className="pagination--toolbar"
                         currentPage={currentLibraryPage}
-                        itemLabel="continuing items"
+                        itemLabel="items"
                         pageCount={libraryPageCount}
-                        totalItems={continuingItems.length}
+                        totalItems={visibleItems.length}
                         onPageChange={setLibraryPage}
                       />
                     )}
@@ -1573,27 +1690,24 @@ export default function AppShellPage() {
                 ) : (
                   <div className="list" aria-label="Item list">
                     {GROUPS.map((group) => {
-                      const groupItems = visibleItems.filter(
+                      const totalGroupItems = visibleItems.filter(
                         (item) => bucketOf(item.status) === group.key,
                       );
-                      const items =
-                        group.key === 'progress'
-                          ? paginatedContinuingItems
-                          : groupItems;
-                      if (!items.length) return null;
+                      const groupItems = paginatedVisibleItems.filter(
+                        (item) => bucketOf(item.status) === group.key,
+                      );
+                      if (!groupItems.length) return null;
 
                       return (
                         <div key={group.key} className="item-group">
                           <div className="group-head">
                             <h3>{group.label}</h3>
                             <span className="n">
-                              {group.key === 'progress'
-                                ? `${items.length} of ${groupItems.length}`
-                                : groupItems.length}
+                              {totalGroupItems.length} total
                             </span>
                           </div>
 
-                          {items.map((item) => (
+                          {groupItems.map((item) => (
                             <article
                               key={item.id}
                               className={`item-row ${selectedId === item.id ? 'is-selected' : ''}`}
@@ -1641,6 +1755,17 @@ export default function AppShellPage() {
                                   <span>•</span>
                                   <span>{item.meta}</span>
                                 </div>
+                                {item.imdbUrl && (
+                                  <a
+                                    className="imdb-source-link imdb-source-link--compact"
+                                    href={item.imdbUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    onClick={(event) => event.stopPropagation()}
+                                  >
+                                    Open on IMDb
+                                  </a>
+                                )}
                               </div>
 
                               <div className="item-right">
@@ -1748,6 +1873,9 @@ export default function AppShellPage() {
                       </div>
                       <div className="detail-credits">
                         <span>Author: {selectedItem.creator}</span>
+                        {selectedItem.genres.length > 0 && (
+                          <span>Genres: {selectedItem.genres.join(', ')}</span>
+                        )}
                         <span>
                           Category: {selectedItem.category.toLowerCase()}
                         </span>
@@ -1764,7 +1892,19 @@ export default function AppShellPage() {
                       <h3 id="description-label" className="section-label">
                         Synopsis
                       </h3>
-                      <p className="description">{selectedItem.description}</p>
+                      <p className="description">
+                        {renderDescription(selectedItem.description)}
+                      </p>
+                      {selectedItem.imdbUrl && (
+                        <a
+                          className="imdb-source-link"
+                          href={selectedItem.imdbUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open on IMDb
+                        </a>
+                      )}
                     </section>
 
                     <section
@@ -2455,6 +2595,185 @@ export default function AppShellPage() {
                     </p>
                   </section>
 
+                  <section
+                    className="content-card tvtime-import-card imdb-import-card"
+                    aria-labelledby="imdbImportTitle"
+                  >
+                    <div className="tvtime-import-head">
+                      <Image
+                        className="tvtime-import-logo imdb-import-logo"
+                        src="/images/imdb-logo.svg"
+                        alt="IMDb"
+                        width={72}
+                        height={36}
+                      />
+                      <div>
+                        <span className="eyebrow">IMDb import</span>
+                        <h3 id="imdbImportTitle">Bring your IMDb list home</h3>
+                        <p>
+                          Import an IMDb CSV export locally, without credentials
+                          or an IMDb connection.
+                        </p>
+                      </div>
+                      <span className="tvtime-import-status">
+                        {imdbPreview ? 'Ready to review' : 'Local only'}
+                      </span>
+                    </div>
+                    <ol className="tvtime-import-steps">
+                      <li>
+                        <strong>1. Choose your CSV</strong>
+                        <span>
+                          Select an IMDb list, ratings, or watchlist export.
+                        </span>
+                      </li>
+                      <li>
+                        <strong>2. Review safely</strong>
+                        <span>
+                          Inspect mapped fields, limits, and duplicate matches.
+                        </span>
+                      </li>
+                      <li>
+                        <strong>3. Confirm the import</strong>
+                        <span>
+                          Your archive stays unchanged until confirmation.
+                        </span>
+                      </li>
+                    </ol>
+                    <div className="tvtime-import-actions">
+                      <button
+                        className="primary-btn"
+                        type="button"
+                        onClick={() => imdbInput.current?.click()}
+                      >
+                        Choose IMDb CSV export
+                      </button>
+                      <span>CSV only · processed in this browser</span>
+                    </div>
+                    <input
+                      ref={imdbInput}
+                      type="file"
+                      accept="text/csv,.csv"
+                      aria-label="Select an IMDb CSV export"
+                      onChange={(event) => void handleImdbFile(event)}
+                      hidden
+                    />
+                    <p className="field-help tvtime-import-help">
+                      Supported IMDb columns are validated before anything can
+                      be saved.
+                    </p>
+                  </section>
+
+                  {imdbPreview && (
+                    <section
+                      className="content-card tvtime-preview-card"
+                      aria-labelledby="imdbPreviewTitle"
+                    >
+                      <div className="tvtime-preview-head">
+                        <div>
+                          <span className="eyebrow">Step 2 of 3 · Preview</span>
+                          <h3 id="imdbPreviewTitle">Review IMDb import</h3>
+                          <p>
+                            Nothing has changed in your archive yet. Confirm
+                            only after reviewing this summary.
+                          </p>
+                        </div>
+                        <span className="tvtime-preview-safe">
+                          No changes yet
+                        </span>
+                      </div>
+                      <dl className="tvtime-preview-summary">
+                        <div>
+                          <dt>Ready to import</dt>
+                          <dd>
+                            {imdbPreview.items.length}{' '}
+                            {imdbPreview.items.length === 1 ? 'item' : 'items'}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Source file</dt>
+                          <dd>{imdbPreview.fileName}</dd>
+                        </div>
+                        <div>
+                          <dt>Duplicates</dt>
+                          <dd>
+                            {imdbPreview.conflicts.length || 'None found'}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Known limits</dt>
+                          <dd>{imdbPreview.warnings.length} notes</dd>
+                        </div>
+                      </dl>
+                      {imdbPreview.conflicts.length > 0 && (
+                        <fieldset className="setting-row">
+                          <legend>Matching local items</legend>
+                          <p>
+                            {imdbPreview.conflicts.length}{' '}
+                            {imdbPreview.conflicts.length === 1
+                              ? 'duplicate was'
+                              : 'duplicates were'}{' '}
+                            found. Choose how to handle them before importing.
+                          </p>
+                          <label>
+                            <input
+                              type="radio"
+                              name="imdb-duplicate-resolution"
+                              checked={imdbDuplicateResolution === 'skip'}
+                              onChange={() =>
+                                setImdbDuplicateResolution('skip')
+                              }
+                            />{' '}
+                            Skip matching items
+                          </label>
+                          <label>
+                            <input
+                              type="radio"
+                              name="imdb-duplicate-resolution"
+                              checked={imdbDuplicateResolution === 'update'}
+                              onChange={() =>
+                                setImdbDuplicateResolution('update')
+                              }
+                            />{' '}
+                            Update IMDb-derived status, rating, and metadata
+                            while keeping local notes and collections
+                          </label>
+                        </fieldset>
+                      )}
+                      <section
+                        className="tvtime-preview-notes"
+                        aria-labelledby="imdbImportNotes"
+                      >
+                        <h4 id="imdbImportNotes">What will not be imported</h4>
+                        <ul>
+                          {imdbPreview.warnings.map((warning) => (
+                            <li key={warning}>{warning}</li>
+                          ))}
+                        </ul>
+                      </section>
+                      <div className="inline-actions">
+                        <button
+                          className="primary-btn"
+                          type="button"
+                          onClick={() => void handleImdbImport()}
+                          disabled={isImdbImporting}
+                        >
+                          {isImdbImporting
+                            ? 'Importing…'
+                            : imdbDuplicateResolution === 'update'
+                              ? 'Confirm import and update matches'
+                              : 'Confirm import and skip matches'}
+                        </button>
+                        <button
+                          className="ghost-btn"
+                          type="button"
+                          onClick={() => setImdbPreview(null)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </section>
+                  )}
+
                   {tvTimePreview && (
                     <section
                       className="content-card tvtime-preview-card"
@@ -2714,8 +3033,18 @@ export default function AppShellPage() {
                     ))}
                   </div>
                   <p className="detail-page-description">
-                    {selectedItem.description}
+                    {renderDescription(selectedItem.description)}
                   </p>
+                  {selectedItem.imdbUrl && (
+                    <a
+                      className="imdb-source-link"
+                      href={selectedItem.imdbUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open on IMDb
+                    </a>
+                  )}
                   <dl className="detail-facts">
                     <div>
                       <dt>Creator</dt>
@@ -2725,6 +3054,12 @@ export default function AppShellPage() {
                       <dt>Format</dt>
                       <dd>{selectedItem.meta}</dd>
                     </div>
+                    {selectedItem.genres.length > 0 && (
+                      <div>
+                        <dt>Genres</dt>
+                        <dd>{selectedItem.genres.join(', ')}</dd>
+                      </div>
+                    )}
                     <div>
                       <dt>Last updated</dt>
                       <dd>2 days ago</dd>
