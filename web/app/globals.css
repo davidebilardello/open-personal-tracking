@@ -820,7 +820,8 @@ section.copy .muted {
 
 .app-shell {
   width: 100%;
-  min-height: 100vh;
+  height: 100dvh;
+  min-height: 0;
   background: linear-gradient(
     180deg,
     rgba(255, 255, 255, 0.02),
@@ -840,6 +841,8 @@ section.copy .muted {
   display: flex;
   flex-direction: column;
   gap: 20px;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .brand {
@@ -979,7 +982,13 @@ section.copy .muted {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
   background: rgba(255, 255, 255, 0.05);
+}
+
+.main-scroll-area {
+  display: contents;
 }
 
 .topbar {
@@ -989,6 +998,13 @@ section.copy .muted {
   gap: 20px;
   padding: 20px 24px 18px;
   border-bottom: 1px solid var(--hairline);
+  position: sticky;
+  top: 0;
+  z-index: 12;
+  box-sizing: border-box;
+  min-block-size: 83px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  backdrop-filter: blur(16px);
 }
 
 .page-title {
@@ -1358,6 +1374,39 @@ section.copy .muted {
   padding: 18px;
 }
 
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 0 18px 18px;
+}
+
+.pagination--toolbar {
+  margin-left: auto;
+  padding: 0;
+  justify-content: flex-end;
+}
+
+.pagination-status {
+  display: grid;
+  gap: 2px;
+  min-width: 150px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--ink);
+}
+
+.pagination-range {
+  color: var(--muted);
+}
+
+.pagination .mini-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .item-group {
   display: grid;
   gap: 10px;
@@ -1536,9 +1585,9 @@ section.copy .muted {
 .detail-panel {
   display: flex;
   flex-direction: column;
+  align-self: start;
   min-width: 0;
   overflow: hidden;
-  min-height: 720px;
 }
 
 .detail-panel[hidden] {
@@ -1648,6 +1697,26 @@ section.copy .muted {
   margin: 0;
   color: var(--muted);
   font-size: 0.96rem;
+}
+
+.imdb-source-link {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-underline-offset: 3px;
+}
+
+.imdb-source-link--compact {
+  display: inline-block;
+  margin-top: 7px;
+  font-size: 0.68rem;
+}
+
+.imdb-source-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 2px;
 }
 
 .progress-stack {
@@ -2167,6 +2236,15 @@ section.copy .muted {
   border-radius: 12px;
   object-fit: cover;
   box-shadow: 0 8px 18px -12px var(--shadow);
+}
+
+.imdb-import-logo {
+  width: 72px;
+  height: 36px;
+  padding: 0;
+  border-radius: 8px;
+  object-fit: contain;
+  background: transparent;
 }
 
 .tvtime-import-head .eyebrow {
@@ -3295,6 +3373,10 @@ section.copy .muted {
   .item-row {
     grid-template-columns: 54px minmax(0, 1fr);
   }
+  .pagination {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
   .item-right {
     grid-column: 1 / -1;
     justify-content: space-between;
@@ -3559,6 +3641,7 @@ section.copy .muted {
 @media (max-width: 900px) {
   .app-shell {
     display: block;
+    height: auto;
     min-height: 100dvh;
     background: var(--bg);
   }
@@ -3569,6 +3652,10 @@ section.copy .muted {
     min-height: 100dvh;
     background: var(--bg);
     padding-bottom: 78px;
+    overflow: visible;
+  }
+  .main-scroll-area {
+    display: block;
   }
   .topbar {
     position: sticky;
@@ -3622,6 +3709,16 @@ section.copy .muted {
   .bottom-nav button.is-active {
     background: color-mix(in srgb, var(--brass) 12%, transparent);
     border: 0;
+  }
+}
+
+@media (min-width: 901px) {
+  .library-panel .panel-header {
+    position: sticky;
+    top: 83px;
+    z-index: 6;
+    background: var(--surface);
+    border-radius: var(--radius) var(--radius) 0 0;
   }
 }
 @media (max-width: 640px) {
