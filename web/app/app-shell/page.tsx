@@ -52,6 +52,7 @@ import {
   type ImdbImportPreview,
 } from '../../../src/import/imdb';
 import { ConnectionStatus } from '../connection-status';
+import { validateItemForm } from '../../../src/application/item-form-validation';
 
 type Episode = {
   id: string;
@@ -467,6 +468,29 @@ export default function AppShellPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [newItem, setNewItem] = useState<ItemForm>(emptyItemForm);
+  const [validationAttempted, setValidationAttempted] = useState(false);
+  const [ratingBadInput, setRatingBadInput] = useState(false);
+  const [drawerSaveError, setDrawerSaveError] = useState<string | null>(null);
+  const ratingInput = useRef<HTMLInputElement>(null);
+  const drawerForm = useRef<HTMLFormElement>(null);
+  const drawerErrors = validationAttempted
+    ? validateItemForm(newItem, ratingBadInput)
+    : {};
+  const resetDrawerFeedback = () => {
+    setValidationAttempted(false);
+    setRatingBadInput(false);
+    setDrawerSaveError(null);
+  };
+  const fieldErrorProps = (id: string) => ({
+    'aria-invalid': drawerErrors[id] ? true : undefined,
+    'aria-describedby': drawerErrors[id] ? `${id}-error` : undefined,
+  });
+  const fieldError = (id: string) =>
+    drawerErrors[id] ? (
+      <p className="field-error" id={`${id}-error`}>
+        {drawerErrors[id]}
+      </p>
+    ) : null;
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [themeMode, setThemeMode] = useState<'dark' | 'light' | 'auto'>('dark');
   const [newItemUsesPlaceholderCover, setNewItemUsesPlaceholderCover] =
@@ -751,6 +775,7 @@ export default function AppShellPage() {
       collections: selectedDomainItem?.collections.join(', ') ?? '',
       seasons,
     });
+    resetDrawerFeedback();
     setEditingItemId(selectedItem.id);
     setNewItemUsesPlaceholderCover(selectedItem.usePlaceholderCover);
     setDetailView('summary');
@@ -758,6 +783,7 @@ export default function AppShellPage() {
   };
 
   const openNewItemDrawer = () => {
+    resetDrawerFeedback();
     setEditingItemId(null);
     setNewItem(emptyItemForm());
     setNewItemUsesPlaceholderCover(preferences.placeholderCovers);
@@ -765,6 +791,7 @@ export default function AppShellPage() {
   };
 
   const closeItemDrawer = () => {
+    resetDrawerFeedback();
     setDrawerOpen(false);
     setEditingItemId(null);
   };
@@ -1193,29 +1220,24 @@ export default function AppShellPage() {
   };
 
   const handleSaveDrawer = async () => {
-    if (!archive || !application.current || !newItem.title.trim()) return;
+    if (!archive || !application.current) return;
+    // Number inputs expose incomplete text (for example "e") as an empty
+    // value. Read badInput before treating a blank rating as omitted.
+    const badInput = ratingInput.current?.validity.badInput ?? false;
+    const errors = validateItemForm(newItem, badInput);
+    setRatingBadInput(badInput);
+    setValidationAttempted(true);
+    setDrawerSaveError(null);
+    const firstInvalid = Object.keys(errors)[0];
+    if (firstInvalid) {
+      // Wait for the associated error text to render before moving focus.
+      requestAnimationFrame(() => {
+        const control = document.getElementById(firstInvalid);
+        if (control && drawerForm.current?.contains(control)) control.focus();
+      });
+      return;
+    }
     const rating = newItem.rating.trim() ? Number(newItem.rating) : undefined;
-    if (
-      rating !== undefined &&
-      (!Number.isFinite(rating) || rating < 0 || rating > 5)
-    ) {
-      setOperationError('Rating must be a number between 0 and 5');
-      return;
-    }
-    const hasInvalidSeriesStructure =
-      newItem.category === 'Series' &&
-      newItem.seasons.some(
-        (season) =>
-          !season.title.trim() ||
-          season.episodes.length === 0 ||
-          season.episodes.some((episode) => !episode.title.trim()),
-      );
-    if (hasInvalidSeriesStructure) {
-      setOperationError(
-        'Each season needs a title and at least one titled episode before saving.',
-      );
-      return;
-    }
     const subunits =
       newItem.category === 'Series' ? seriesSubunits(newItem.seasons) : [];
 
@@ -1267,8 +1289,9 @@ export default function AppShellPage() {
       setNewItem(emptyItemForm());
       setEditingItemId(null);
       setDrawerOpen(false);
+      resetDrawerFeedback();
     } catch (error) {
-      setOperationError(
+      setDrawerSaveError(
         error instanceof Error ? error.message : 'Could not save your item',
       );
     }
@@ -3574,7 +3597,14 @@ export default function AppShellPage() {
       {drawerOpen && (
         <>
           <div className="drawer-overlay is-open" onClick={closeItemDrawer} />
-          <aside
+          <form
+            ref={drawerForm}
+            noValidate
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleSaveDrawer();
+            }}
+            onChange={() => setDrawerSaveError(null)}
             className="add-drawer is-open"
             role="dialog"
             aria-modal="true"
@@ -3584,6 +3614,7 @@ export default function AppShellPage() {
               <h3 id="addDrawerTitle">New item</h3>
               <button
                 className="add-drawer-close"
+                aria-label="Close item form"
                 type="button"
                 onClick={closeItemDrawer}
               >
@@ -3592,13 +3623,21 @@ export default function AppShellPage() {
             </div>
 
             <div className="add-drawer-body">
+              <p className="drawer-feedback" role="alert" aria-atomic="true">
+                {drawerSaveError ??
+                  (Object.keys(drawerErrors).length > 0
+                    ? 'Please correct the highlighted fields before saving.'
+                    : '')}
+              </p>
               <div>
                 <label className="field-label" htmlFor="fTitle">
-                  Title
+                  Title <span aria-hidden="true">(required)</span>
                 </label>
                 <input
                   className="field-control"
                   id="fTitle"
+                  required
+                  {...fieldErrorProps('fTitle')}
                   type="text"
                   value={newItem.title}
                   onChange={(event) =>
@@ -3609,6 +3648,7 @@ export default function AppShellPage() {
                   }
                   placeholder="e.g. Dune"
                 />
+                {fieldError('fTitle')}
               </div>
 
               <div>
@@ -3660,6 +3700,16 @@ export default function AppShellPage() {
                 <input
                   className="field-control"
                   id="fRating"
+                  ref={ratingInput}
+                  aria-invalid={drawerErrors.fRating ? true : undefined}
+                  aria-describedby={
+                    drawerErrors.fRating
+                      ? 'fRating-help fRating-error'
+                      : 'fRating-help'
+                  }
+                  onInput={(event) =>
+                    setRatingBadInput(event.currentTarget.validity.badInput)
+                  }
                   type="number"
                   min="0"
                   max="5"
@@ -3673,6 +3723,10 @@ export default function AppShellPage() {
                   }
                   placeholder="0–5"
                 />
+                <p className="field-help" id="fRating-help">
+                  Optional. Enter a number from 0 to 5; decimals are allowed.
+                </p>
+                {fieldError('fRating')}
               </div>
 
               <div>
@@ -3803,6 +3857,8 @@ export default function AppShellPage() {
                           <input
                             className="field-control"
                             id={`season-title-${season.id}`}
+                            required
+                            {...fieldErrorProps(`season-title-${season.id}`)}
                             value={season.title}
                             onChange={(event) =>
                               updateDraftSeason(season.id, {
@@ -3811,6 +3867,7 @@ export default function AppShellPage() {
                             }
                             placeholder={`Season ${seasonIndex + 1}`}
                           />
+                          {fieldError(`season-title-${season.id}`)}
                           <label
                             className="field-label"
                             htmlFor={`season-description-${season.id}`}
@@ -3853,11 +3910,20 @@ export default function AppShellPage() {
                               <button
                                 className="mini-btn"
                                 type="button"
+                                id={`season-add-episode-${season.id}`}
+                                aria-describedby={
+                                  drawerErrors[
+                                    `season-add-episode-${season.id}`
+                                  ]
+                                    ? `season-add-episode-${season.id}-error`
+                                    : undefined
+                                }
                                 onClick={() => addDraftEpisode(season.id)}
                               >
                                 Add episode
                               </button>
                             </div>
+                            {fieldError(`season-add-episode-${season.id}`)}
                             {season.episodes.map((episode, episodeIndex) => (
                               <fieldset
                                 key={episode.id}
@@ -3873,6 +3939,10 @@ export default function AppShellPage() {
                                 <input
                                   className="field-control"
                                   id={`episode-title-${episode.id}`}
+                                  required
+                                  {...fieldErrorProps(
+                                    `episode-title-${episode.id}`,
+                                  )}
                                   value={episode.title}
                                   onChange={(event) =>
                                     updateDraftEpisode(season.id, episode.id, {
@@ -3881,6 +3951,7 @@ export default function AppShellPage() {
                                   }
                                   placeholder="Episode title"
                                 />
+                                {fieldError(`episode-title-${episode.id}`)}
                                 <label
                                   className="field-label"
                                   htmlFor={`episode-description-${episode.id}`}
@@ -4002,15 +4073,11 @@ export default function AppShellPage() {
               >
                 Cancel
               </button>
-              <button
-                className="primary-btn"
-                type="button"
-                onClick={handleSaveDrawer}
-              >
+              <button className="primary-btn" type="submit">
                 Save item
               </button>
             </div>
-          </aside>
+          </form>
         </>
       )}
     </div>

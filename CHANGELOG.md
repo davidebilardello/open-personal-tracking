@@ -30,6 +30,9 @@ The format follows [Keep a Changelog 2.0.0](https://keepachangelog.com/en/2.0.0/
 
 ### Fixed
 
+- Item creation and editing now identify missing titles, invalid ratings, and
+  incomplete series structure with accessible field feedback while preserving
+  the draft and archive when validation fails.
 - Progress updates for books now update the displayed page count.
 - The recent-history timeline and episode presentation have clearer, responsive layouts.
 - Placeholder-cover choices now persist in the local archive; placeholders no longer show unrelated media artwork.

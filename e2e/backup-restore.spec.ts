@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { downloadArchive } from './helpers/archive.js';
 
 const APP_PATH = '/app-shell';
 const ARCHIVE_DATABASE_NAME = 'open-personal-tracking';
@@ -183,10 +184,7 @@ test('exports, clears, and restores a complete local archive', async ({
   await page.reload();
   await expect(itemInList(page, TITLE)).toBeVisible();
 
-  await openManagePage(page, 'Export');
-  const downloadPromise = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Export now' }).click();
-  const download = await downloadPromise;
+  const download = await downloadArchive(page);
   const backupPath = testInfo.outputPath(download.suggestedFilename());
   await download.saveAs(backupPath);
 
@@ -586,10 +584,7 @@ test('opens and restores local data while offline after its first visit', async 
       .fill('Offline archive item');
     await expect(itemInList(page, 'Offline archive item')).toBeVisible();
 
-    await openManagePage(page, 'Export');
-    const downloadPromise = page.waitForEvent('download');
-    await page.getByRole('button', { name: 'Export now' }).click();
-    const download = await downloadPromise;
+    const download = await downloadArchive(page);
     const backupPath = testInfo.outputPath(download.suggestedFilename());
     await download.saveAs(backupPath);
 
