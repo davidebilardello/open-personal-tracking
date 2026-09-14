@@ -1,26 +1,8 @@
-import { expect, test, type Page } from '@playwright/test';
-
-const snapshot = (page: Page) =>
-  page.evaluate(async () => {
-    const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open('open-personal-tracking', 1);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-    try {
-      return await new Promise<string>((resolve, reject) => {
-        const request = db
-          .transaction('archive', 'readonly')
-          .objectStore('archive')
-          .get('current');
-        request.onsuccess = () =>
-          resolve(JSON.stringify(request.result?.snapshot ?? null));
-        request.onerror = () => reject(request.error);
-      });
-    } finally {
-      db.close();
-    }
-  });
+import { expect, test } from '@playwright/test';
+import {
+  failNextArchiveWrite,
+  readPersistedArchive,
+} from './helpers/archive.js';
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
@@ -44,7 +26,7 @@ test('required title and rating errors preserve the draft and archive until corr
     .getByLabel('Description', { exact: true })
     .fill('Keep this draft');
   await rating.fill('6');
-  const before = await snapshot(page);
+  const before = await readPersistedArchive(page);
   await drawer.getByRole('button', { name: 'Save item' }).click();
   await expect(title).toBeFocused();
   await expect(title).toHaveAttribute('required', '');
@@ -54,7 +36,7 @@ test('required title and rating errors preserve the draft and archive until corr
     /Optional.*0.*5.*Enter a number/,
   );
   await expect(drawer.getByRole('alert')).toContainText('Please correct');
-  expect(await snapshot(page)).toBe(before);
+  expect(await readPersistedArchive(page)).toBe(before);
   await expect(drawer.getByLabel('Description', { exact: true })).toHaveValue(
     'Keep this draft',
   );
@@ -67,7 +49,7 @@ test('required title and rating errors preserve the draft and archive until corr
   await expect(drawer.getByRole('alert')).toBeEmpty();
   await rating.press('Enter');
   await expect(drawer).not.toBeVisible();
-  const saved = JSON.parse(await snapshot(page));
+  const saved = JSON.parse(await readPersistedArchive(page));
   expect(saved.items).toHaveLength(1);
   expect(saved.items[0]).toMatchObject({
     title: 'Validated item',
@@ -94,18 +76,18 @@ test('incomplete numeric input is rejected instead of saved as an omitted rating
   expect(
     await rating.evaluate((input: HTMLInputElement) => input.validity.badInput),
   ).toBe(true);
-  const before = await snapshot(page);
+  const before = await readPersistedArchive(page);
   await drawer.getByRole('button', { name: 'Save item' }).click();
   await expect(rating).toHaveAttribute('aria-invalid', 'true');
   await expect(rating).toBeFocused();
-  expect(await snapshot(page)).toBe(before);
+  expect(await readPersistedArchive(page)).toBe(before);
   expect(
     await rating.evaluate((input: HTMLInputElement) => input.validity.badInput),
   ).toBe(true);
   await rating.press('Backspace');
   await drawer.getByRole('button', { name: 'Save item' }).click();
   await expect(drawer).not.toBeVisible();
-  const saved = JSON.parse(await snapshot(page));
+  const saved = JSON.parse(await readPersistedArchive(page));
   expect(saved.items).toHaveLength(1);
   expect(saved.items[0]).not.toHaveProperty('rating');
 });
@@ -119,7 +101,7 @@ for (const rating of ['0', '5']) {
     await drawer.getByLabel('Rating', { exact: true }).fill(rating);
     await drawer.getByRole('button', { name: 'Save item' }).click();
     await expect(drawer).not.toBeVisible();
-    expect(JSON.parse(await snapshot(page)).items[0].rating).toBe(
+    expect(JSON.parse(await readPersistedArchive(page)).items[0].rating).toBe(
       Number(rating),
     );
   });
@@ -136,11 +118,11 @@ test('series errors identify the control and clear when the structure is repaire
   await drawer.getByRole('button', { name: 'Add season', exact: true }).click();
   const season = drawer.getByLabel('Season 1 title', { exact: true });
   await season.fill('');
-  const before = await snapshot(page);
+  const before = await readPersistedArchive(page);
   await drawer.getByRole('button', { name: 'Save item' }).click();
   await expect(season).toBeFocused();
   await expect(season).toHaveAccessibleDescription('Enter a season title.');
-  expect(await snapshot(page)).toBe(before);
+  expect(await readPersistedArchive(page)).toBe(before);
   await season.fill('Season one');
   // A new season starts with one episode; remove it to exercise the empty case.
   await drawer.getByRole('button', { name: 'Remove', exact: true }).click();
@@ -156,7 +138,7 @@ test('series errors identify the control and clear when the structure is repaire
   await drawer.getByRole('button', { name: 'Save item' }).click();
   await expect(episode).toBeFocused();
   await expect(episode).toHaveAccessibleDescription('Enter an episode title.');
-  expect(await snapshot(page)).toBe(before);
+  expect(await readPersistedArchive(page)).toBe(before);
   await episode.fill('Pilot');
   await drawer.getByRole('button', { name: 'Save item' }).click();
   await expect(drawer).not.toBeVisible();
@@ -169,17 +151,8 @@ test('a failed storage write reports inside the drawer and preserves the draft f
   await drawer
     .getByRole('textbox', { name: 'Title', exact: true })
     .fill('Storage retry');
-  const before = await snapshot(page);
-  await page.evaluate(() => {
-    const put = IDBObjectStore.prototype.put;
-    IDBObjectStore.prototype.put = function () {
-      IDBObjectStore.prototype.put = put;
-      throw new DOMException(
-        'Test storage quota exceeded',
-        'QuotaExceededError',
-      );
-    };
-  });
+  const before = await readPersistedArchive(page);
+  await failNextArchiveWrite(page);
   await drawer.getByRole('button', { name: 'Save item' }).click();
   await expect(drawer.getByRole('alert')).toContainText(
     'Test storage quota exceeded',
@@ -187,10 +160,10 @@ test('a failed storage write reports inside the drawer and preserves the draft f
   await expect(
     drawer.getByRole('textbox', { name: 'Title', exact: true }),
   ).toHaveValue('Storage retry');
-  expect(await snapshot(page)).toBe(before);
+  expect(await readPersistedArchive(page)).toBe(before);
   await drawer.getByRole('button', { name: 'Save item' }).click();
   await expect(drawer).not.toBeVisible();
-  expect(JSON.parse(await snapshot(page)).items).toHaveLength(1);
+  expect(JSON.parse(await readPersistedArchive(page)).items).toHaveLength(1);
 });
 
 test('editing applies the same checks without replacing the saved item on failure', async ({
@@ -203,7 +176,7 @@ test('editing applies the same checks without replacing the saved item on failur
   await drawer.getByLabel('Rating', { exact: true }).fill('3');
   await drawer.getByRole('button', { name: 'Save item' }).click();
   await expect(drawer).not.toBeVisible();
-  const before = await snapshot(page);
+  const before = await readPersistedArchive(page);
   await page
     .getByLabel('Item list')
     .getByRole('heading', { name: 'Edit fixture' })
@@ -218,11 +191,11 @@ test('editing applies the same checks without replacing the saved item on failur
     'aria-invalid',
     'true',
   );
-  expect(await snapshot(page)).toBe(before);
+  expect(await readPersistedArchive(page)).toBe(before);
   await drawer.getByLabel('Rating', { exact: true }).fill('4.2');
   await drawer.getByRole('button', { name: 'Save item' }).click();
   await expect(drawer).not.toBeVisible();
-  const saved = JSON.parse(await snapshot(page));
+  const saved = JSON.parse(await readPersistedArchive(page));
   expect(saved.items).toHaveLength(1);
   expect(saved.items[0].id).toBe(JSON.parse(before).items[0].id);
   expect(saved.items[0].rating).toBe(4.2);
