@@ -201,6 +201,17 @@ The first milestone is complete when a user can:
 12. Restore the backup.
 13. Recover the same state.
 
+## Item entry validation
+
+Item creation and editing must prevent invalid data from being persisted,
+preserve drafts when validation or saving fails, and provide accessible,
+actionable feedback that helps users correct errors and retry. Presentation
+validation supplements the authoritative archive schemas without changing the
+backup format or persisted data contract.
+
+Interaction and accessibility acceptance criteria are documented in
+[Item entry accessibility](ITEM_ENTRY_ACCESSIBILITY.md).
+
 ## Explicit non-goals for MVP
 
 Do not implement initially:
