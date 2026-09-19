@@ -361,6 +361,43 @@ describe('TV Time GDPR CSV import', () => {
     });
   });
 
+  it('raises watch counts from legacy rewatch_count rows without double counting', () => {
+    const header =
+      'series_name,created_at,uuid,watch_count,type,watches,entity_type,movie_name,rewatch_count,episode_id,episode_number,season_number,series_uuid';
+    const preview = previewTvTimeImport(
+      [
+        file(
+          'tracking-prod-records.csv',
+          [
+            header,
+            ',2025-03-01 10:00:00,movie-total,,rewatch_count,,movie,Total Film,2,,,,',
+            'Total Series,2025-03-02 10:00:00,show-total,,watch,,episode,,2,ep-1,1,1,show-total',
+            'Total Series,2025-03-02 10:00:00,show-total,,rewatch_count,,episode,,2,ep-1,1,1,show-total',
+          ].join('\n'),
+        ),
+      ],
+      createEmptyArchive(),
+    );
+
+    const byTitle = (title: string) =>
+      preview.items.find((item) => item.title === title);
+    expect(byTitle('Total Film')).toMatchObject({
+      status: 'completed',
+      attributes: { tvTimeWatchCount: 3 },
+    });
+    expect(byTitle('Total Series')).toMatchObject({
+      attributes: { tvTimeRewatchCount: 2 },
+    });
+    expect(byTitle('Total Series')?.subunits).toEqual([
+      expect.objectContaining({ kind: 'season' }),
+      expect.objectContaining({
+        title: 'Episode 1',
+        completed: true,
+        watchCount: 3,
+      }),
+    ]);
+  });
+
   it('surfaces duplicates and requires an explicit resolution before applying', () => {
     const archive = createEmptyArchive();
     archive.items.push(
