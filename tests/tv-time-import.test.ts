@@ -431,6 +431,39 @@ describe('TV Time GDPR CSV import', () => {
     ]);
   });
 
+  it('reads the legacy last-erewatch_count marker as a watched rewatch total', () => {
+    const header =
+      'series_name,created_at,uuid,watch_count,type,watches,entity_type,movie_name,rewatch_count,episode_id,episode_number,season_number,series_uuid';
+    const preview = previewTvTimeImport(
+      [
+        file(
+          'tracking-prod-records.csv',
+          [
+            header,
+            ',2025-03-03 10:00:00,movie-last,,last-erewatch_count,,movie,Legacy Rewatch Film,2,,,,',
+            'Legacy Rewatch Series,2025-03-03 10:00:00,show-last,,last-erewatch_count,,episode,,2,ep-1,1,1,show-last',
+          ].join('\n'),
+        ),
+      ],
+      createEmptyArchive(),
+    );
+
+    const byTitle = (title: string) =>
+      preview.items.find((item) => item.title === title);
+    expect(byTitle('Legacy Rewatch Film')).toMatchObject({
+      status: 'completed',
+      attributes: { tvTimeWatchCount: 3 },
+    });
+    expect(byTitle('Legacy Rewatch Series')?.subunits).toEqual([
+      expect.objectContaining({ kind: 'season' }),
+      expect.objectContaining({
+        title: 'Episode 1',
+        completed: true,
+        watchCount: 3,
+      }),
+    ]);
+  });
+
   it('surfaces duplicates and requires an explicit resolution before applying', () => {
     const archive = createEmptyArchive();
     archive.items.push(

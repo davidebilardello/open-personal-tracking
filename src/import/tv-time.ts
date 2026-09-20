@@ -471,6 +471,7 @@ const trackingRowKind = (
   if (type === 'last-episode-watched') return 'watched-marker';
   if (type === 'rewatch') return 'rewatch';
   if (type === 'rewatch_count') return 'rewatch-total';
+  if (type === 'last-erewatch_count') return 'rewatch-total';
   return 'other';
 };
 
