@@ -487,9 +487,7 @@ const trackingWatchCount = (
   if (kind === 'watch') return Math.max(recorded, 1 + rewatches);
   if (kind === 'watched-marker') return Math.max(recorded, 1);
   if (kind === 'rewatch') return Math.max(recorded, 1 + Math.max(1, rewatches));
-  if (kind === 'rewatch-total' && rewatches > 0) {
-    return Math.max(recorded, 1 + rewatches);
-  }
+  if (kind === 'rewatch-total') return Math.max(recorded, 1 + rewatches);
   return recorded;
 };
 
